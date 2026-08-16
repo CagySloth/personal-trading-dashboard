@@ -19,8 +19,12 @@
     });
 
     const candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries);
+    const smaSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: '#2962FF',
+      lineWidth: 2,
+    });
 
-    fetch('http://127.0.0.1:8000/prices/SPY')
+    fetch('http://127.0.0.1:8000/prices/SPY?sma=20')
       .then(r => r.json())
       .then(data => {
         candlestickSeries.setData(
@@ -31,6 +35,11 @@
             low: d.low,
             close: d.close,
           }))
+        );
+        smaSeries.setData(
+          data
+            .filter(d => d.sma !== null)
+            .map(d => ({ time: d.date, value: d.sma }))
         );
         chart.timeScale().fitContent();
       });

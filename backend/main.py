@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from database import get_connection, init_db
+from indicators import sma
 
 app = FastAPI()
 
@@ -14,7 +15,10 @@ init_db()
 
 
 @app.get("/prices/{ticker}")
-def get_prices(ticker: str):
+def get_prices(
+    ticker: str,
+    sma_window: int | None = Query(None, alias="sma", gt=0),
+):
     symbol = ticker.upper()
     conn = get_connection()
 
@@ -38,4 +42,12 @@ def get_prices(ticker: str):
     ).fetchall()
     conn.close()
 
-    return [dict(r) for r in rows]
+    data = [dict(r) for r in rows]
+
+    if sma_window is not None:
+        closes = [r["close"] for r in data]
+        sma_values = sma(closes, sma_window)
+        for row_dict, sma_val in zip(data, sma_values):
+            row_dict["sma"] = sma_val
+
+    return data
