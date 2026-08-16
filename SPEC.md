@@ -320,3 +320,103 @@ independently via the API. No configuration UI was added — that remains
 deferred to a later milestone, now informed by having two structurally
 different indicators (overlay-with-one-parameter vs. separate-panel-with-
 multiple-parameters) to design against.
+
+# Milestone 5 Spec: Indicator Configuration Layer
+
+## Context
+Milestones 1-4 are complete: multi-ticker (SPY, AAPL, QQQ) dashboard with
+a candlestick chart, a 20-day SMA overlay, and a 14-day RSI panel with
+70/30 threshold lines. All indicator parameters (SMA window, RSI window,
+RSI thresholds) are currently hardcoded defaults passed as function/API
+parameters, but there is no way for the user to change them without
+editing code. This milestone adds that configuration layer.
+
+## Goal
+Let the user change indicator parameters (windows, thresholds) and line
+colors, persist those choices in SQLite, and have the dashboard use the
+saved values instead of hardcoded defaults — across restarts, not just
+within one session.
+
+## Explicitly out of scope for this milestone
+- Per-ticker configuration — settings are global (apply the same
+  regardless of which ticker is selected), not per-symbol. This may
+  change in a future milestone but is out of scope now.
+- Saved presets or multiple named configurations — one active global
+  config, no "save as" / switch-between-configs functionality.
+- Any indicator other than SMA and RSI
+- Line style/thickness or other visual properties beyond color — color
+  only for this pass.
+- Scheduling / cron / automated fetch cadence
+- Authentication
+- Alerts, news feed, or anything unrelated to indicator configuration
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when SMA and RSI's existing parameters and colors are
+configurable and persisted, nothing more.
+
+## Design decisions (already made — don't re-litigate these)
+- **Scope of settings**: global, not per-ticker.
+- **What's configurable**: for SMA — window size, line color. For RSI —
+  window size, overbought threshold, oversold threshold, line color.
+- **Persistence**: a new SQLite table (e.g. `indicator_settings`), not
+  browser localStorage — keeps settings available from any device later
+  (relevant to the eventual iPhone-access goal), and consistent with
+  "don't lose state on restart" already used for price data.
+- **Defaults**: if no settings row exists yet (first run), fall back to
+  the current hardcoded defaults (SMA 20, RSI 14/70/30, some reasonable
+  default colors) rather than erroring.
+
+## Steps
+
+1. **Settings table** (backend)
+   - New SQLite table, e.g. `indicator_settings`, holding one row (global,
+     not per-ticker) with columns for: `sma_window`, `sma_color`,
+     `rsi_window`, `rsi_overbought`, `rsi_oversold`, `rsi_color`.
+   - On first run, if no row exists, seed it with current defaults
+     (20 / some color, 14 / 70 / 30 / some color).
+
+2. **Settings API endpoints**
+   - `GET /settings` returns the current indicator settings.
+   - `PUT /settings` (or `POST`) updates them, replacing the stored
+     values. Validate reasonable ranges server-side (e.g. window > 0,
+     0 < oversold < overbought < 100 for RSI) and return a clear error
+     if invalid — don't let bad values silently corrupt the chart.
+
+3. **Wire existing endpoints to use stored settings**
+   - `GET /prices/{ticker}` — when `sma` or `rsi` query params are used
+     without explicit values (or if you simplify to always use stored
+     settings when the indicator is requested), pull window/threshold
+     values from `indicator_settings` instead of hardcoded constants.
+   - Decide and document whether query params can still override stored
+     settings per-request, or whether stored settings are now the single
+     source of truth. Either is fine — just be explicit about which.
+
+4. **Frontend settings UI**
+   - A simple settings panel or modal (doesn't need to be visually
+     polished) with: number input for SMA window, color picker for SMA
+     line, number inputs for RSI window/overbought/oversold, color picker
+     for RSI line.
+   - Saving calls `PUT /settings` and then re-renders the chart using the
+     new values — no page reload required.
+   - Panel pre-populates from `GET /settings` on load, showing current
+     (not hardcoded) values.
+
+5. **Verify end to end**
+   - Change SMA window and color via the UI; confirm the chart updates
+     to reflect both.
+   - Change RSI window and thresholds; confirm the RSI panel and its
+     70/30-equivalent reference lines update to match the new values.
+   - Restart the backend and reload the frontend; confirm settings
+     persisted (not reset to hardcoded defaults).
+   - Submit an invalid value (e.g. RSI oversold > overbought) and confirm
+     it's rejected with a clear error, not silently accepted.
+   - Confirm settings apply consistently across all three tickers
+     (global, not per-ticker, as scoped).
+
+## Definition of done
+The user can open a settings panel, change SMA's window/color and RSI's
+window/thresholds/color, save them, and see the chart update accordingly
+— for any ticker in the watchlist. Settings persist across a backend
+restart. Invalid values are rejected, not silently applied. Per-ticker
+settings, saved presets, and additional visual properties remain
+deferred to future milestones.

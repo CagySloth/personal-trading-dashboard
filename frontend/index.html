@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Trading Dashboard</title>
   <style>
-    body { margin: 0; }
+    body { margin: 0; font-family: sans-serif; }
     #ticker-select {
       position: absolute;
       top: 10px;
@@ -14,16 +14,108 @@
       font-size: 16px;
       padding: 4px 8px;
     }
+    #settings-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 10;
+      font-size: 14px;
+      padding: 4px 12px;
+      cursor: pointer;
+    }
     #chart { width: 100vw; height: 100vh; }
+
+    /* Settings panel */
+    #settings-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 100;
+    }
+    #settings-panel {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: #fff;
+      padding: 24px;
+      border-radius: 8px;
+      min-width: 300px;
+    }
+    #settings-panel h2 { margin-top: 0; }
+    #settings-panel label {
+      display: block;
+      margin: 10px 0 4px;
+      font-size: 13px;
+      color: #555;
+    }
+    #settings-panel input[type="number"] {
+      width: 80px;
+      padding: 4px;
+      font-size: 14px;
+    }
+    #settings-panel input[type="color"] {
+      vertical-align: middle;
+      width: 40px;
+      height: 28px;
+      border: 1px solid #ccc;
+      padding: 0;
+      cursor: pointer;
+    }
+    .settings-row { display: flex; align-items: center; gap: 8px; }
+    #settings-panel hr { border: none; border-top: 1px solid #ddd; margin: 16px 0; }
+    #settings-actions { margin-top: 18px; display: flex; gap: 8px; justify-content: flex-end; }
+    #settings-actions button { padding: 6px 16px; font-size: 14px; cursor: pointer; }
+    #settings-error { color: #d32f2f; font-size: 13px; margin-top: 10px; display: none; }
   </style>
 </head>
 <body>
   <select id="ticker-select"></select>
+  <button id="settings-btn">Settings</button>
+
+  <div id="settings-overlay">
+    <div id="settings-panel">
+      <h2>Indicator Settings</h2>
+
+      <label>SMA Window</label>
+      <div class="settings-row">
+        <input type="number" id="set-sma-window" min="1">
+        <label style="margin:0">Color</label>
+        <input type="color" id="set-sma-color">
+      </div>
+
+      <hr>
+
+      <label>RSI Window</label>
+      <div class="settings-row">
+        <input type="number" id="set-rsi-window" min="1">
+        <label style="margin:0">Color</label>
+        <input type="color" id="set-rsi-color">
+      </div>
+
+      <label>Overbought Threshold</label>
+      <input type="number" id="set-rsi-overbought" min="1" max="99">
+
+      <label>Oversold Threshold</label>
+      <input type="number" id="set-rsi-oversold" min="1" max="99">
+
+      <div id="settings-error"></div>
+      <div id="settings-actions">
+        <button id="settings-cancel">Cancel</button>
+        <button id="settings-save">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div id="chart"></div>
   <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   <script>
     const API = 'http://127.0.0.1:8000';
     const select = document.getElementById('ticker-select');
+    const settingsBtn = document.getElementById('settings-btn');
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const settingsError = document.getElementById('settings-error');
 
     const chart = LightweightCharts.createChart(document.getElementById('chart'), {
       width: window.innerWidth,
@@ -48,16 +140,24 @@
       lineWidth: 2,
     }, 1);
 
-    // 70/30 threshold lines
-    rsiSeries.createPriceLine({ price: 70, color: '#787878', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
-    rsiSeries.createPriceLine({ price: 30, color: '#787878', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+    // RSI threshold lines — we'll recreate these when settings change.
+    let rsiOverboughtLine = null;
+    let rsiOversoldLine = null;
 
-    // Set RSI pane scale to 0-100
+    function setThresholdLines(overbought, oversold) {
+      if (rsiOverboughtLine) rsiSeries.removePriceLine(rsiOverboughtLine);
+      if (rsiOversoldLine) rsiSeries.removePriceLine(rsiOversoldLine);
+      rsiOverboughtLine = rsiSeries.createPriceLine({ price: overbought, color: '#787878', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+      rsiOversoldLine = rsiSeries.createPriceLine({ price: oversold, color: '#787878', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+    }
+
     const rsiPane = chart.panes()[1];
     rsiPane.setHeight(150);
 
+    // --- Data loading ---
+
     function loadTicker(symbol) {
-      fetch(`${API}/prices/${symbol}?sma=20&rsi=14`)
+      fetch(`${API}/prices/${symbol}?sma=true&rsi=true`)
         .then(r => r.json())
         .then(data => {
           candlestickSeries.setData(
@@ -83,8 +183,80 @@
         });
     }
 
-    // Populate dropdown from API, then load default ticker.
-    fetch(`${API}/tickers`)
+    // Apply visual settings (colors, thresholds) from a settings object.
+    function applyVisualSettings(s) {
+      smaSeries.applyOptions({ color: s.sma_color });
+      rsiSeries.applyOptions({ color: s.rsi_color });
+      setThresholdLines(s.rsi_overbought, s.rsi_oversold);
+    }
+
+    // --- Settings panel ---
+
+    function openSettings() {
+      settingsError.style.display = 'none';
+      fetch(`${API}/settings`)
+        .then(r => r.json())
+        .then(s => {
+          document.getElementById('set-sma-window').value = s.sma_window;
+          document.getElementById('set-sma-color').value = s.sma_color;
+          document.getElementById('set-rsi-window').value = s.rsi_window;
+          document.getElementById('set-rsi-color').value = s.rsi_color;
+          document.getElementById('set-rsi-overbought').value = s.rsi_overbought;
+          document.getElementById('set-rsi-oversold').value = s.rsi_oversold;
+          settingsOverlay.style.display = 'block';
+        });
+    }
+
+    function closeSettings() {
+      settingsOverlay.style.display = 'none';
+    }
+
+    function saveSettings() {
+      settingsError.style.display = 'none';
+      const body = {
+        sma_window: parseInt(document.getElementById('set-sma-window').value),
+        sma_color: document.getElementById('set-sma-color').value,
+        rsi_window: parseInt(document.getElementById('set-rsi-window').value),
+        rsi_color: document.getElementById('set-rsi-color').value,
+        rsi_overbought: parseFloat(document.getElementById('set-rsi-overbought').value),
+        rsi_oversold: parseFloat(document.getElementById('set-rsi-oversold').value),
+      };
+
+      fetch(`${API}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+        .then(r => {
+          if (!r.ok) return r.json().then(err => { throw err; });
+          return r.json();
+        })
+        .then(s => {
+          closeSettings();
+          applyVisualSettings(s);
+          loadTicker(select.value);
+        })
+        .catch(err => {
+          const msg = err.detail || JSON.stringify(err);
+          settingsError.textContent = typeof msg === 'string' ? msg : msg.map(e => e.msg).join('; ');
+          settingsError.style.display = 'block';
+        });
+    }
+
+    settingsBtn.addEventListener('click', openSettings);
+    document.getElementById('settings-cancel').addEventListener('click', closeSettings);
+    document.getElementById('settings-save').addEventListener('click', saveSettings);
+
+    // --- Init ---
+
+    // Load settings first, apply visuals, then load tickers and data.
+    fetch(`${API}/settings`)
+      .then(r => r.json())
+      .then(s => {
+        applyVisualSettings(s);
+
+        return fetch(`${API}/tickers`);
+      })
       .then(r => r.json())
       .then(tickers => {
         tickers.forEach(t => {

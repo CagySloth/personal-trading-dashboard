@@ -30,6 +30,19 @@ def init_db() -> None:
             volume    INTEGER NOT NULL,
             PRIMARY KEY (ticker_id, date)
         );
+
+
+        CREATE TABLE IF NOT EXISTS indicator_settings (
+            id              INTEGER PRIMARY KEY CHECK (id = 1),
+            sma_window      INTEGER NOT NULL DEFAULT 20,
+            sma_color       TEXT    NOT NULL DEFAULT '#2962FF',
+            rsi_window      INTEGER NOT NULL DEFAULT 14,
+            rsi_overbought  REAL    NOT NULL DEFAULT 70,
+            rsi_oversold    REAL    NOT NULL DEFAULT 30,
+            rsi_color       TEXT    NOT NULL DEFAULT '#E91E63'
+        );
+
+        INSERT OR IGNORE INTO indicator_settings (id) VALUES (1);
     """)
     # Seed starter tickers.
     for symbol in ("SPY", "AAPL", "QQQ"):
