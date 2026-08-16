@@ -627,3 +627,139 @@ data without manual intervention, while the backend still starts up
 promptly and serves existing cached data even if the catch-up fetch is
 slow. Data that's already current doesn't trigger an unnecessary fetch.
 The Milestone 6 scheduled job continues to work as before, unaffected.
+
+# Milestone 8 Spec: Timeframe Selection
+
+## Context
+Milestones 1-7 are complete: multi-ticker dashboard with configurable
+SMA/RSI, a daily scheduled fetch job, and a startup staleness check —
+all built around a single timeframe (daily candles). This milestone adds
+the ability to select a different timeframe (e.g. 1 day, 1 hour, 5
+minute) and have the chart and both indicators re-render against that
+resolution. This depends on Milestones 6-7 already being solid — do not
+start this until scheduled fetch + startup catch-up are confirmed
+working, since intraday resolution on top of unreliable freshness isn't
+useful.
+
+## Important constraint — read before implementing
+yfinance's intraday data availability is limited by Yahoo's own
+retention, not by anything you control:
+- **1-minute bars**: only the last ~7 days available
+- **2m / 5m / 15m / 30m / 60m / 90m**: only the last ~60 days
+- **Daily (1d) and above**: full history available
+
+This is a hard ceiling, not something caching or retry logic can work
+around. The UI must reflect this — don't let the user request a 1-minute
+chart going back 3 months and silently show nothing or an error with no
+explanation.
+
+## Goal
+Let the user pick a timeframe from a small supported set, see the chart
+and both indicators (SMA, RSI) render correctly at that resolution, with
+clear handling when a requested range exceeds what that timeframe's data
+retention allows.
+
+## Explicitly out of scope for this milestone
+- Live/streaming quotes (Finnhub WebSocket) — still a separate,
+  independent piece of future work
+- Automatically scheduling fetches for every timeframe — intraday
+  timeframes are fetched on-demand (see design decisions below), not
+  pre-cached on a schedule for all tickers
+- Per-ticker default timeframe memory / persisted UI preference — the
+  timeframe selector resets to the default (1 day) on page load for now
+- Gap-filling, interpolation, or backfilling data beyond what yfinance
+  actually provides for a given timeframe
+- Any new indicator or change to indicator math itself — SMA/RSI logic
+  is reused as-is, just computed against whichever timeframe's bars are
+  loaded
+
+Do not add any of the above even if it seems easy or natural.
+
+## Supported timeframe set for this milestone
+Start with: **1 day (existing), 1 hour, 5 minute**. Skip 1-minute for
+now — its 7-day retention window is narrow enough that it's likely to be
+more confusing than useful as a first pass; it can be added later as a
+near-trivial extension of this same mechanism once the rest is proven.
+
+## Design decisions (already made — don't re-litigate these)
+- **Schema**: generalize the existing `daily_prices` table (or add a
+  new, more general `prices` table) with a `timeframe` column, so bars
+  of different resolutions coexist rather than needing a separate table
+  per timeframe. Decide which approach is less disruptive to existing
+  Milestone 1-7 code and take that path — either is acceptable, but
+  don't create a proliferation of near-identical tables (one per
+  timeframe) if a single table with a `timeframe` column works cleanly.
+- **Fetch strategy**: on-demand, not pre-scheduled. When a timeframe is
+  requested for a ticker and isn't already cached (or is stale per that
+  timeframe's own reasonable freshness expectation — e.g. an hour-old 5m
+  cache is stale, an hour-old 1d cache is not), fetch it from yfinance
+  at request time, cache the result, then serve it. The existing daily
+  scheduled job (Milestone 6) and startup check (Milestone 7) continue
+  to apply only to the 1-day timeframe — don't extend them to intraday
+  timeframes in this milestone.
+- **API shape**: extend `GET /prices/{ticker}` with a `timeframe`
+  parameter (e.g. `?timeframe=1d`, default `1d` if omitted, preserving
+  all existing behavior exactly). Indicator params (`sma`, `rsi`) work
+  the same way regardless of timeframe — they operate on however many
+  bars are loaded, whatever the resolution.
+- **Out-of-range requests**: if a requested date range exceeds what a
+  timeframe supports (e.g. 5-minute bars from 4 months ago), return a
+  clear, structured error or a partial result with a clear indicator of
+  the actual available range — not a silent empty chart. Pick whichever
+  is simpler to implement correctly; just make the limitation visible to
+  the frontend so it can inform the user.
+
+## Steps
+
+1. **Schema change** (backend)
+   - Add timeframe support to the price-storage schema per the design
+     decision above. Migrate existing daily data to fit the new shape if
+     the table is restructured, don't lose Milestone 1-7 cached history.
+
+2. **Fetch logic for intraday timeframes**
+   - Extend the existing fetch function to accept a timeframe parameter
+     and pull the corresponding yfinance interval.
+   - Implement on-demand fetch-and-cache: if requested data isn't cached
+     or is stale for that timeframe, fetch before responding.
+   - Implement clear handling for out-of-range requests per the design
+     decision above.
+
+3. **Extend the API endpoint**
+   - `GET /prices/{ticker}?timeframe=5m&sma=20&rsi=14` — timeframe
+     composes with the existing indicator params, all independently
+     optional. Omitting `timeframe` preserves exact current (1-day)
+     behavior.
+
+4. **Frontend timeframe selector**
+   - Add a simple selector (dropdown, tabs, whatever's straightforward)
+     offering 1 day / 1 hour / 5 minute.
+   - Changing it re-fetches price + indicator data at the new resolution
+     and re-renders both the candlestick chart and the RSI panel.
+   - If the backend signals an out-of-range/limited-availability
+     response, surface that to the user clearly (e.g. "5-minute data
+     only available for the last 60 days") rather than showing a
+     confusing empty or broken chart.
+
+5. **Verify end to end**
+   - Confirm 1-day behavior is completely unchanged from Milestone 7
+     when no timeframe param is passed.
+   - Select 1-hour and 5-minute timeframes for at least one ticker;
+     confirm bars render at the correct resolution and both SMA and RSI
+     recompute correctly against the new bar count (spot-check a value
+     by hand, same discipline as prior milestones).
+   - Request a 5-minute timeframe with an intentionally too-wide date
+     range and confirm the out-of-range handling behaves as designed
+     (clear error or clearly bounded partial result), not a silent
+     failure.
+   - Confirm switching timeframes for a ticker not previously cached at
+     that resolution triggers an on-demand fetch and still returns
+     correct data (just possibly slower on first request).
+
+## Definition of done
+The user can switch between 1 day, 1 hour, and 5 minute timeframes for
+any watchlist ticker, with the candlestick chart, SMA, and RSI all
+correctly reflecting the selected resolution. Data outside a timeframe's
+real availability window is handled visibly, not silently. Existing
+1-day behavior, the Milestone 6 schedule, and the Milestone 7 startup
+check are all unaffected. 1-minute timeframe, live quotes, and persisted
+timeframe preference remain deferred to future milestones.

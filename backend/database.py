@@ -21,17 +21,17 @@ def init_db() -> None:
             symbol TEXT NOT NULL UNIQUE
         );
 
-        CREATE TABLE IF NOT EXISTS daily_prices (
+        CREATE TABLE IF NOT EXISTS prices (
             ticker_id INTEGER NOT NULL REFERENCES tickers(id),
-            date      TEXT    NOT NULL,
+            timeframe TEXT    NOT NULL DEFAULT '1d',
+            datetime  TEXT    NOT NULL,
             open      REAL   NOT NULL,
             high      REAL   NOT NULL,
             low       REAL   NOT NULL,
             close     REAL   NOT NULL,
             volume    INTEGER NOT NULL,
-            PRIMARY KEY (ticker_id, date)
+            PRIMARY KEY (ticker_id, timeframe, datetime)
         );
-
 
         CREATE TABLE IF NOT EXISTS indicator_settings (
             id              INTEGER PRIMARY KEY CHECK (id = 1),
@@ -45,6 +45,21 @@ def init_db() -> None:
 
         INSERT OR IGNORE INTO indicator_settings (id) VALUES (1);
     """)
+
+    # Migrate from daily_prices to prices if the old table exists.
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()]
+    if "daily_prices" in tables:
+        conn.execute("""
+            INSERT OR IGNORE INTO prices
+                (ticker_id, timeframe, datetime, open, high, low, close, volume)
+            SELECT ticker_id, '1d', date, open, high, low, close, volume
+            FROM daily_prices
+        """)
+        conn.execute("DROP TABLE daily_prices")
+        conn.commit()
+
     # Seed starter tickers.
     for symbol in ("SPY", "AAPL", "QQQ"):
         conn.execute(
@@ -68,12 +83,14 @@ def _last_expected_trading_day() -> date:
 
 
 def is_data_stale() -> tuple[bool, str, str]:
-    """Check if cached price data is stale.
+    """Check if cached daily price data is stale.
 
     Returns (is_stale, latest_cached_date, expected_date).
     """
     conn = get_connection()
-    row = conn.execute("SELECT MAX(date) AS latest FROM daily_prices").fetchone()
+    row = conn.execute(
+        "SELECT MAX(datetime) AS latest FROM prices WHERE timeframe = '1d'"
+    ).fetchone()
     conn.close()
 
     expected = _last_expected_trading_day()

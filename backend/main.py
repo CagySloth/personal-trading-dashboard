@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from database import get_connection, init_db, is_data_stale
-from fetch import fetch
+from fetch import fetch, ensure_fresh, TIMEFRAME_CONFIG
 from indicators import sma, rsi
 
 logger = logging.getLogger(__name__)
@@ -138,9 +138,16 @@ def list_tickers():
 @app.get("/prices/{ticker}")
 def get_prices(
     ticker: str,
+    timeframe: str = Query("1d"),
     include_sma: bool = Query(False, alias="sma"),
     include_rsi: bool = Query(False, alias="rsi"),
 ):
+    if timeframe not in TIMEFRAME_CONFIG:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported timeframe: {timeframe}. Supported: {', '.join(TIMEFRAME_CONFIG)}",
+        )
+
     symbol = ticker.upper()
     conn = get_connection()
 
@@ -153,14 +160,18 @@ def get_prices(
         raise HTTPException(status_code=404, detail=f"Ticker {symbol} not found")
 
     ticker_id = row["id"]
+
+    # On-demand fetch for intraday timeframes (daily handled by scheduler).
+    ensure_fresh(ticker_id, symbol, timeframe)
+
     rows = conn.execute(
         """
-        SELECT date, open, high, low, close, volume
-        FROM daily_prices
-        WHERE ticker_id = ?
-        ORDER BY date ASC
+        SELECT datetime, open, high, low, close, volume
+        FROM prices
+        WHERE ticker_id = ? AND timeframe = ?
+        ORDER BY datetime ASC
         """,
-        (ticker_id,),
+        (ticker_id, timeframe),
     ).fetchall()
 
     # Read stored settings if any indicator is requested.

@@ -6,13 +6,29 @@
   <title>Trading Dashboard</title>
   <style>
     body { margin: 0; font-family: sans-serif; }
-    #ticker-select {
+    #toolbar {
       position: absolute;
       top: 10px;
       left: 10px;
       z-index: 10;
+      display: flex;
+      gap: 8px;
+    }
+    #ticker-select, #timeframe-select {
       font-size: 16px;
       padding: 4px 8px;
+    }
+    #data-notice {
+      position: absolute;
+      top: 44px;
+      left: 10px;
+      z-index: 10;
+      font-size: 12px;
+      color: #666;
+      background: rgba(255,255,255,0.9);
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: none;
     }
     #settings-btn {
       position: absolute;
@@ -71,7 +87,15 @@
   </style>
 </head>
 <body>
-  <select id="ticker-select"></select>
+  <div id="toolbar">
+    <select id="ticker-select"></select>
+    <select id="timeframe-select">
+      <option value="1d">1 Day</option>
+      <option value="1h">1 Hour</option>
+      <option value="5m">5 Min</option>
+    </select>
+  </div>
+  <div id="data-notice"></div>
   <button id="settings-btn">Settings</button>
 
   <div id="settings-overlay">
@@ -113,9 +137,21 @@
   <script>
     const API = 'http://127.0.0.1:8000';
     const select = document.getElementById('ticker-select');
+    const tfSelect = document.getElementById('timeframe-select');
+    const dataNotice = document.getElementById('data-notice');
     const settingsBtn = document.getElementById('settings-btn');
     const settingsOverlay = document.getElementById('settings-overlay');
     const settingsError = document.getElementById('settings-error');
+
+    // Lightweight-charts accepts "YYYY-MM-DD" strings for daily data
+    // but needs unix timestamps (seconds) for intraday data.
+    function parseTime(datetimeStr) {
+      if (datetimeStr.length === 10) return datetimeStr;
+      return Math.floor(new Date(datetimeStr.replace(' ', 'T') + 'Z').getTime() / 1000);
+    }
+
+    const TF_LABELS = { '1d': '1-day', '1h': '1-hour', '5m': '5-minute' };
+    const TF_RETENTION = { '1h': '~730 days', '5m': '~60 days' };
 
     const chart = LightweightCharts.createChart(document.getElementById('chart'), {
       width: window.innerWidth,
@@ -157,12 +193,27 @@
     // --- Data loading ---
 
     function loadTicker(symbol) {
-      fetch(`${API}/prices/${symbol}?sma=true&rsi=true`)
+      const tf = tfSelect.value;
+      dataNotice.style.display = 'none';
+      fetch(`${API}/prices/${symbol}?timeframe=${tf}&sma=true&rsi=true`)
         .then(r => r.json())
         .then(data => {
+          if (!data.length) {
+            candlestickSeries.setData([]);
+            smaSeries.setData([]);
+            rsiSeries.setData([]);
+            const ret = TF_RETENTION[tf];
+            if (ret) {
+              dataNotice.textContent = `No ${TF_LABELS[tf]} data available for ${symbol}. Yahoo Finance retains ${TF_LABELS[tf]} data for only ${ret}.`;
+            } else {
+              dataNotice.textContent = `No data available for ${symbol}.`;
+            }
+            dataNotice.style.display = 'block';
+            return;
+          }
           candlestickSeries.setData(
             data.map(d => ({
-              time: d.date,
+              time: parseTime(d.datetime),
               open: d.open,
               high: d.high,
               low: d.low,
@@ -172,12 +223,12 @@
           smaSeries.setData(
             data
               .filter(d => d.sma !== null)
-              .map(d => ({ time: d.date, value: d.sma }))
+              .map(d => ({ time: parseTime(d.datetime), value: d.sma }))
           );
           rsiSeries.setData(
             data
               .filter(d => d.rsi !== null)
-              .map(d => ({ time: d.date, value: d.rsi }))
+              .map(d => ({ time: parseTime(d.datetime), value: d.rsi }))
           );
           chart.timeScale().fitContent();
         });
@@ -270,6 +321,7 @@
       });
 
     select.addEventListener('change', () => loadTicker(select.value));
+    tfSelect.addEventListener('change', () => loadTicker(select.value));
 
     window.addEventListener('resize', () => {
       chart.resize(window.innerWidth, window.innerHeight);
