@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPY Daily Chart</title>
+  <style>
+    body { margin: 0; }
+    #chart { width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="chart"></div>
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <script>
+    const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+
+    const candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries);
+
+    fetch('http://127.0.0.1:8000/prices/SPY')
+      .then(r => r.json())
+      .then(data => {
+        candlestickSeries.setData(
+          data.map(d => ({
+            time: d.date,
+            open: d.open,
+            high: d.high,
+            low: d.low,
+            close: d.close,
+          }))
+        );
+        chart.timeScale().fitContent();
+      });
+
+    window.addEventListener('resize', () => {
+      chart.resize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
