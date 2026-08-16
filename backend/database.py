@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import date, timedelta
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "market_data.db"
@@ -51,3 +52,34 @@ def init_db() -> None:
         )
     conn.commit()
     conn.close()
+
+
+def _last_expected_trading_day() -> date:
+    """Return the most recent weekday (Mon-Fri) that has fully closed.
+
+    If today is a weekday, the last completed trading day is yesterday
+    (today's bar isn't final until market close).  Walk backward over
+    weekends to land on a Friday.
+    """
+    day = date.today() - timedelta(days=1)
+    while day.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        day -= timedelta(days=1)
+    return day
+
+
+def is_data_stale() -> tuple[bool, str, str]:
+    """Check if cached price data is stale.
+
+    Returns (is_stale, latest_cached_date, expected_date).
+    """
+    conn = get_connection()
+    row = conn.execute("SELECT MAX(date) AS latest FROM daily_prices").fetchone()
+    conn.close()
+
+    expected = _last_expected_trading_day()
+
+    if row["latest"] is None:
+        return True, "(empty)", str(expected)
+
+    latest = row["latest"]
+    return latest < str(expected), latest, str(expected)

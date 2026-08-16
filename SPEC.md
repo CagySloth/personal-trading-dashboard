@@ -516,3 +516,114 @@ fetch script. A manual trigger endpoint exists for on-demand refresh. A
 single ticker's fetch failure doesn't block the others or crash the
 scheduler. Live/intraday quotes and timeframe selection remain deferred
 to their own future milestones.
+
+# Milestone 7 Spec: Startup Staleness Check
+
+## Context
+Milestone 6 added a scheduled fetch job (daily, in-process scheduler) plus
+a manual `POST /fetch/run` trigger endpoint. That scheduler only fires if
+the backend happens to be running at the scheduled time. Since this app
+runs locally rather than as an always-on server, the backend is often
+*not* running at that time (laptop asleep, app not launched, etc.), so
+scheduled runs can be silently missed with nothing catching up the gap.
+This milestone adds a startup check that detects stale data and triggers
+a catch-up fetch automatically, without waiting for the next scheduled
+time.
+
+## Goal
+Every time the backend starts, it checks whether cached price data is
+stale (older than the last completed trading day) and, if so, triggers
+the existing fetch job immediately — so opening the dashboard after any
+gap (a day, a weekend, a week) reliably shows current data without the
+user needing to manually trigger a refresh.
+
+## Explicitly out of scope for this milestone
+- Any change to the daily scheduled job itself (still runs as configured
+  in Milestone 6) — this milestone adds a startup check alongside it, not
+  a replacement
+- Live/intraday quotes (Finnhub WebSocket) — still deferred
+- Timeframe selection — still deferred, and still depends on this
+  freshness work being solid first
+- Any frontend changes beyond an optional simple loading/status indicator
+  (see Step 3) — no new UI features
+- Retrying failed catch-up fetches on a sub-schedule (e.g. retry every 5
+  minutes until success) — out of scope, one attempt on startup is enough
+  for this milestone
+
+Do not add any of the above even if it seems easy or natural.
+
+## Design decisions (already made — don't re-litigate these)
+- **Staleness definition**: cached data is "stale" if the most recent
+  date in `daily_prices` (check across the watchlist, or just one
+  representative ticker — your call, but be consistent) is older than
+  the last completed trading day. Simplest correct approach: compare the
+  latest cached date against "yesterday" accounting for weekends (don't
+  flag Monday morning as stale just because Friday's close is the most
+  recent trading day available yet).
+- **No need for full market-calendar awareness**: don't build in holiday
+  handling for this milestone — weekday-vs-weekend awareness is enough.
+  A holiday will just trigger one harmless extra fetch attempt that
+  yfinance will handle gracefully (no new data, no error). Not worth the
+  complexity of a full trading-calendar dependency right now.
+- **Reuse existing fetch logic**: this calls the same fetch-all-tickers
+  logic already used by the Milestone 6 scheduler and the `/fetch/run`
+  endpoint — no new fetch code, just a new trigger condition.
+- **Non-blocking startup**: the staleness check and catch-up fetch should
+  not make the backend fail to start or hang indefinitely if the fetch
+  is slow or fails — the API should still come up and serve whatever
+  cached data exists, with the catch-up fetch happening in the
+  background if possible, or with a short reasonable timeout if it needs
+  to block.
+
+## Steps
+
+1. **Staleness check function** (backend)
+   - A function that reads the most recent cached date from
+     `daily_prices` and compares it against the expected latest trading
+     day (weekday-aware, per the design decision above), returning
+     whether data is stale.
+
+2. **Wire into startup**
+   - On backend startup, after the scheduler from Milestone 6 is
+     registered, run the staleness check.
+   - If stale, trigger the existing fetch-all-tickers job immediately
+     (same logic as `/fetch/run`), logging that a catch-up fetch is
+     running and why.
+   - If not stale, log that data is current and skip the fetch — don't
+     fetch unnecessarily on every restart if data's already fresh.
+
+3. **Non-blocking behavior**
+   - Ensure this doesn't delay the backend from accepting requests —
+     run the catch-up fetch as a background task if your framework
+     supports it easily, rather than blocking startup until it
+     completes. If a simple blocking call is much easier to implement
+     correctly and the fetch is fast enough in practice, that's an
+     acceptable tradeoff to flag and confirm rather than over-engineer.
+
+4. **(Optional) simple staleness indicator on the frontend**
+   - If straightforward, surface a small, unobtrusive indicator (e.g. "
+     data as of [date]" or "refreshing..." text) so the user can tell
+     whether they're looking at current or catching-up data. Skip this
+     if it adds meaningful complexity — it's a nice-to-have for this
+     milestone, not a requirement.
+
+5. **Verify end to end**
+   - Stop the backend, manually set/confirm the cached data is a few
+     days old (or use existing older data if available), restart the
+     backend, and confirm the catch-up fetch fires automatically and
+     brings data current — without the user doing anything manually.
+   - Restart the backend again immediately after (data now fresh) and
+     confirm it correctly skips an unnecessary fetch this time.
+   - Confirm the backend still comes up and serves existing cached data
+     promptly even if the catch-up fetch is slow or one ticker fails
+     (reusing Milestone 6's per-ticker error handling).
+   - Confirm the existing daily scheduled job from Milestone 6 still
+     fires normally on its own schedule, unaffected by this change.
+
+## Definition of done
+Restarting the backend after any gap in uptime (a missed scheduled run,
+an overnight shutdown, a week away) automatically catches up stale price
+data without manual intervention, while the backend still starts up
+promptly and serves existing cached data even if the catch-up fetch is
+slow. Data that's already current doesn't trigger an unnecessary fetch.
+The Milestone 6 scheduled job continues to work as before, unaffected.

@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -8,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from database import get_connection, init_db
+from database import get_connection, init_db, is_data_stale
 from fetch import fetch
 from indicators import sma, rsi
 
@@ -18,11 +19,25 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(fetch, "cron", hour=16, minute=30, timezone="US/Eastern", id="daily_fetch")
 
 
+def _startup_staleness_check() -> None:
+    stale, latest, expected = is_data_stale()
+    if stale:
+        logger.info(
+            "Data is stale (latest: %s, expected: %s) — running catch-up fetch",
+            latest, expected,
+        )
+        fetch()
+        logger.info("Catch-up fetch complete")
+    else:
+        logger.info("Data is current (latest: %s) — skipping fetch", latest)
+
+
 @asynccontextmanager
 async def lifespan(app):
     init_db()
     scheduler.start()
     logger.info("Scheduler started — daily fetch at 4:30 PM ET")
+    threading.Thread(target=_startup_staleness_check, daemon=True).start()
     yield
     scheduler.shutdown()
     logger.info("Scheduler stopped")
