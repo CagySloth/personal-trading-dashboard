@@ -3,16 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SPY Daily Chart</title>
+  <title>Trading Dashboard</title>
   <style>
     body { margin: 0; }
+    #ticker-select {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      font-size: 16px;
+      padding: 4px 8px;
+    }
     #chart { width: 100vw; height: 100vh; }
   </style>
 </head>
 <body>
+  <select id="ticker-select"></select>
   <div id="chart"></div>
   <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   <script>
+    const API = 'http://127.0.0.1:8000';
+    const select = document.getElementById('ticker-select');
+
     const chart = LightweightCharts.createChart(document.getElementById('chart'), {
       width: window.innerWidth,
       height: window.innerHeight,
@@ -24,25 +36,43 @@
       lineWidth: 2,
     });
 
-    fetch('http://127.0.0.1:8000/prices/SPY?sma=20')
+    function loadTicker(symbol) {
+      fetch(`${API}/prices/${symbol}?sma=20`)
+        .then(r => r.json())
+        .then(data => {
+          candlestickSeries.setData(
+            data.map(d => ({
+              time: d.date,
+              open: d.open,
+              high: d.high,
+              low: d.low,
+              close: d.close,
+            }))
+          );
+          smaSeries.setData(
+            data
+              .filter(d => d.sma !== null)
+              .map(d => ({ time: d.date, value: d.sma }))
+          );
+          chart.timeScale().fitContent();
+        });
+    }
+
+    // Populate dropdown from API, then load default ticker.
+    fetch(`${API}/tickers`)
       .then(r => r.json())
-      .then(data => {
-        candlestickSeries.setData(
-          data.map(d => ({
-            time: d.date,
-            open: d.open,
-            high: d.high,
-            low: d.low,
-            close: d.close,
-          }))
-        );
-        smaSeries.setData(
-          data
-            .filter(d => d.sma !== null)
-            .map(d => ({ time: d.date, value: d.sma }))
-        );
-        chart.timeScale().fitContent();
+      .then(tickers => {
+        tickers.forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t.symbol;
+          opt.textContent = t.symbol;
+          select.appendChild(opt);
+        });
+        select.value = 'SPY';
+        loadTicker('SPY');
       });
+
+    select.addEventListener('change', () => loadTicker(select.value));
 
     window.addEventListener('resize', () => {
       chart.resize(window.innerWidth, window.innerHeight);

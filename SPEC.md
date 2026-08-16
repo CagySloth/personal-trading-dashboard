@@ -132,3 +132,94 @@ The SPY chart shows candlesticks with a 20-day SMA line overlaid,
 computed server-side from cached data, verified correct against a manual
 spot-check. The `/prices/{ticker}` endpoint works both with and without
 the `sma` parameter. Nothing else changed.
+
+# Milestone 3 Spec: Watchlist (Multiple Tickers)
+
+## Context
+Milestone 1 (single-ticker end-to-end loop) and Milestone 2 (SMA overlay)
+are complete. SPY currently flows: yfinance → SQLite → FastAPI →
+lightweight-charts, with a 20-day SMA overlay. This milestone generalizes
+the pipeline from one hardcoded ticker to a small set of tickers the user
+can switch between. Do not touch the SMA logic itself except where it
+needs to work per-ticker instead of SPY-only.
+
+## Goal
+Support multiple tickers end to end: stored in SQLite, fetchable via a
+script that loops over them, selectable from the frontend, each rendering
+its own chart + SMA overlay correctly.
+
+## Explicitly out of scope for this milestone
+- Configurability of indicators (colors, parameters, settings UI) — this
+  is intentionally deferred to a later milestone once there's more than
+  one indicator to design the config system against. Do not build a
+  settings/preferences layer, color picker, or parameter UI here.
+- Any indicator other than the existing SMA
+- Scheduling / cron / automated fetch cadence — fetch script remains
+  manual/on-demand
+- Authentication
+- Alerts, news feed, or any feature beyond ticker selection + chart
+- Styling polish beyond a simple, functional way to pick a ticker
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when ticker switching works correctly, not when it's
+feature-rich.
+
+## Starter tickers
+Seed the `tickers` table with: **SPY, AAPL, QQQ**. This just needs to
+prove "more than one ticker works," not be a final watchlist — more can
+be added later by inserting rows, without code changes.
+
+## Design decisions (already made — don't re-litigate these)
+- Ticker list lives in the existing `tickers` table (already created in
+  Milestone 1) — no new table needed.
+- Fetch script changes from "hardcoded SPY" to "loop over all rows in
+  `tickers`," still run manually, not scheduled.
+- Frontend ticker selection can be as simple as a dropdown or basic list
+  — no design polish expected here.
+
+## Steps
+
+1. **Seed the tickers table**
+   - Insert SPY, AAPL, QQQ into `tickers` (via the fetch script itself,
+     a small seed script, or a one-time manual insert — your call).
+
+2. **Update the fetch script**
+   - Instead of pulling one hardcoded symbol, loop over every row in
+     `tickers` and fetch/upsert daily OHLCV for each into `daily_prices`,
+     same upsert logic as Milestone 1 (no duplicate rows on re-run).
+
+3. **Add a tickers-list API endpoint**
+   - `GET /tickers` returns the list of available tickers (symbol, and
+     id if useful) so the frontend knows what it can offer for
+     selection.
+   - Existing `GET /prices/{ticker}?sma=20` endpoint stays as is — it
+     already takes a ticker parameter, so no change needed there beyond
+     confirming it works correctly for AAPL and QQQ too, not just SPY.
+
+4. **Frontend ticker selection**
+   - Add a simple selector (dropdown is fine) populated from `GET
+     /tickers`.
+   - Selecting a ticker re-fetches `/prices/{ticker}?sma=20` for that
+     symbol and re-renders the chart (candles + SMA line) for it.
+   - Default to one ticker (e.g. SPY) on initial page load.
+
+5. **Verify end to end**
+   - Run the updated fetch script; confirm all three tickers land
+     correctly in `daily_prices` with no duplicates on re-run.
+   - Confirm `GET /tickers` returns all three.
+   - Confirm switching the selector between SPY, AAPL, and QQQ shows the
+     correct chart and correct SMA line for each — spot-check at least
+     one non-SPY ticker's SMA value by hand, same as Milestone 2's
+     verification approach.
+   - Confirm adding a fourth ticker directly to the `tickers` table (no
+     code change), then re-running the fetch script, makes it appear as
+     selectable in the frontend.
+
+## Definition of done
+The dashboard offers SPY, AAPL, and QQQ as selectable tickers. Choosing
+any of them shows the correct candlestick chart with a correct 20-day SMA
+overlay, sourced from SQLite. The fetch script populates all tickers in
+the table, not just one. Adding a new ticker to the table and re-running
+the fetch script makes it selectable without any code changes. No
+indicator configuration UI, scheduling, or other out-of-scope features
+were added.

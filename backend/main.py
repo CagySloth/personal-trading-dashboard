@@ -14,6 +14,14 @@ app.add_middleware(
 init_db()
 
 
+@app.get("/tickers")
+def list_tickers():
+    conn = get_connection()
+    rows = conn.execute("SELECT id, symbol FROM tickers ORDER BY symbol").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 @app.get("/prices/{ticker}")
 def get_prices(
     ticker: str,

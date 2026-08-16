@@ -31,4 +31,10 @@ def init_db() -> None:
             PRIMARY KEY (ticker_id, date)
         );
     """)
+    # Seed starter tickers.
+    for symbol in ("SPY", "AAPL", "QQQ"):
+        conn.execute(
+            "INSERT OR IGNORE INTO tickers (symbol) VALUES (?)", (symbol,)
+        )
+    conn.commit()
     conn.close()
