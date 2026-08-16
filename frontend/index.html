@@ -28,16 +28,36 @@
     const chart = LightweightCharts.createChart(document.getElementById('chart'), {
       width: window.innerWidth,
       height: window.innerHeight,
+      layout: {
+        panes: {
+          separatorColor: '#9B9B9B',
+        },
+      },
     });
 
+    // Price pane (pane 0): candlesticks + SMA
     const candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries);
     const smaSeries = chart.addSeries(LightweightCharts.LineSeries, {
       color: '#2962FF',
       lineWidth: 2,
     });
 
+    // RSI pane (pane 1)
+    const rsiSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: '#E91E63',
+      lineWidth: 2,
+    }, 1);
+
+    // 70/30 threshold lines
+    rsiSeries.createPriceLine({ price: 70, color: '#787878', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+    rsiSeries.createPriceLine({ price: 30, color: '#787878', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+
+    // Set RSI pane scale to 0-100
+    const rsiPane = chart.panes()[1];
+    rsiPane.setHeight(150);
+
     function loadTicker(symbol) {
-      fetch(`${API}/prices/${symbol}?sma=20`)
+      fetch(`${API}/prices/${symbol}?sma=20&rsi=14`)
         .then(r => r.json())
         .then(data => {
           candlestickSeries.setData(
@@ -53,6 +73,11 @@
             data
               .filter(d => d.sma !== null)
               .map(d => ({ time: d.date, value: d.sma }))
+          );
+          rsiSeries.setData(
+            data
+              .filter(d => d.rsi !== null)
+              .map(d => ({ time: d.date, value: d.rsi }))
           );
           chart.timeScale().fitContent();
         });

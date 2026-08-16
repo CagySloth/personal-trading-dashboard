@@ -223,3 +223,100 @@ the table, not just one. Adding a new ticker to the table and re-running
 the fetch script makes it selectable without any code changes. No
 indicator configuration UI, scheduling, or other out-of-scope features
 were added.
+
+# Milestone 4 Spec: Second Indicator (RSI)
+
+## Context
+Milestones 1-3 are complete: multiple tickers (SPY, AAPL, QQQ) flow end to
+end from yfinance → SQLite → FastAPI → lightweight-charts, with a
+selectable ticker and a 20-day SMA overlay on the price chart. This
+milestone adds a second, structurally different indicator: RSI (Relative
+Strength Index). Do not touch the existing SMA logic or the ticker
+selection built in Milestone 3.
+
+## Goal
+Add RSI as a second indicator, rendered in its own chart panel below the
+existing candlestick chart, computed server-side from data already in
+SQLite. No new data source needed.
+
+## Explicitly out of scope for this milestone
+- Indicator configuration / settings UI (colors, parameter editing,
+  persistence of user preferences) — still intentionally deferred. This
+  milestone exists partly to reveal what a future config system needs to
+  support (RSI has more parameters and a different rendering shape than
+  SMA), but do not build the config system itself yet.
+- Any indicator other than SMA and RSI
+- Scheduling / cron / automated fetch cadence
+- Authentication
+- Alerts, news feed, or anything beyond the two indicators
+- Styling polish beyond what's needed for RSI to be clearly readable in
+  its own panel
+
+Do not add any of the above even if it seems easy or natural.
+
+## Ticker
+Works across all tickers already in the watchlist (SPY, AAPL, QQQ) — RSI
+should follow the same per-ticker selection behavior as SMA, not be
+SPY-only.
+
+## Design decisions (already made — don't re-litigate these)
+- **Default window**: 14-day, implemented as a parameter (same pattern as
+  SMA's window), not hardcoded.
+- **Default thresholds**: 70 (overbought) / 30 (oversold), the
+  conventional values. Also implement as parameters, not hardcoded, even
+  though the config UI to change them doesn't exist yet — same "make it a
+  parameter now, expose it later" approach used for SMA's window.
+- **Smoothing method**: use Wilder's smoothing (the standard RSI
+  calculation), not a naive simple-average approximation. RSI computed
+  with the wrong smoothing method gives materially different values, so
+  this is worth doing correctly the first time rather than approximating.
+- **API shape**: extend the existing `GET /prices/{ticker}` endpoint
+  further, e.g. `?rsi=14`, independently of `?sma=20` — both should be
+  usable together or separately. Consistent with the pattern from
+  Milestone 2, not a new endpoint.
+- **Rendering**: RSI renders in its own panel/pane below the price chart,
+  not overlaid on candles — different scale (0-100) makes an overlay
+  meaningless. Check lightweight-charts' mechanism for synchronized
+  multi-pane charts during implementation.
+
+## Steps
+
+1. **RSI calculation function** (backend)
+   - Pure function: takes a series of closes and a window size, returns
+     an RSI series (0-100) using Wilder's smoothing method.
+   - No I/O — should be straightforward to hand-verify against a few
+     manually calculated values.
+
+2. **Extend the API endpoint**
+   - `GET /prices/{ticker}?sma=20&rsi=14` returns OHLCV plus SMA plus RSI
+     values, each independently optional via its own query param.
+   - Omitting `rsi` preserves current (Milestone 1-3) behavior exactly.
+
+3. **Frontend RSI panel**
+   - Add a second chart pane below the existing candlestick + SMA chart,
+     synchronized on the same time axis.
+   - Render the RSI line in that pane, scaled 0-100.
+   - Add reference lines (or equivalent) at the 70 and 30 thresholds so
+     overbought/oversold zones are visually identifiable.
+   - RSI panel updates correctly when the ticker selector changes,
+     matching the selected ticker's data.
+
+4. **Verify end to end**
+   - Hand-check RSI values against a manual Wilder's-smoothing
+     calculation on 2-3 dates for at least one ticker.
+   - Confirm the RSI panel is time-synchronized with the price chart
+     above it (same date range, aligned).
+   - Confirm switching tickers updates both panels correctly.
+   - Confirm requesting `?sma=20` without `?rsi=14` (and vice versa)
+     still works independently — the two indicators don't depend on each
+     other.
+
+## Definition of done
+Selecting any of the three watchlist tickers shows the candlestick chart
+with SMA overlay (as before) plus a new RSI panel below it, using a
+14-day window and 70/30 threshold lines, computed correctly via Wilder's
+smoothing and verified by hand. The two indicators can be requested
+independently via the API. No configuration UI was added — that remains
+deferred to a later milestone, now informed by having two structurally
+different indicators (overlay-with-one-parameter vs. separate-panel-with-
+multiple-parameters) to design against.

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from database import get_connection, init_db
-from indicators import sma
+from indicators import sma, rsi
 
 app = FastAPI()
 
@@ -26,6 +26,7 @@ def list_tickers():
 def get_prices(
     ticker: str,
     sma_window: int | None = Query(None, alias="sma", gt=0),
+    rsi_window: int | None = Query(None, alias="rsi", gt=0),
 ):
     symbol = ticker.upper()
     conn = get_connection()
@@ -52,10 +53,16 @@ def get_prices(
 
     data = [dict(r) for r in rows]
 
+    closes = [r["close"] for r in data]
+
     if sma_window is not None:
-        closes = [r["close"] for r in data]
         sma_values = sma(closes, sma_window)
         for row_dict, sma_val in zip(data, sma_values):
             row_dict["sma"] = sma_val
+
+    if rsi_window is not None:
+        rsi_values = rsi(closes, rsi_window)
+        for row_dict, rsi_val in zip(data, rsi_values):
+            row_dict["rsi"] = rsi_val
 
     return data
