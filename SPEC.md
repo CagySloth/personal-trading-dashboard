@@ -420,3 +420,99 @@ window/thresholds/color, save them, and see the chart update accordingly
 restart. Invalid values are rejected, not silently applied. Per-ticker
 settings, saved presets, and additional visual properties remain
 deferred to future milestones.
+
+# Milestone 6 Spec: Scheduled Fetch Job
+
+## Context
+Milestones 1-5 are complete: multi-ticker (SPY, AAPL, QQQ) dashboard with
+SMA overlay and RSI panel, both configurable via a settings layer
+persisted in SQLite. Data freshness currently depends on the user
+manually re-running the fetch script — there is no automated refresh.
+This milestone automates that, still using daily candles only. It does
+not add live/intraday quotes (Finnhub WebSocket) or a timeframe selector
+(1min/5min/etc.) — both are explicitly separate, later milestones that
+depend on this one being done first.
+
+## Goal
+The existing fetch script (which already loops over all tickers in the
+`tickers` table, per Milestone 3) runs automatically on a schedule
+instead of only when manually triggered, so cached data stays current
+without the user having to remember to run it.
+
+## Explicitly out of scope for this milestone
+- Live/intraday quotes via Finnhub WebSocket — separate milestone
+- Timeframe selection (1min/5min/etc.) — separate milestone, and
+  depends on this one being done first
+- Any change to indicator logic, settings, or the frontend chart itself
+- Authentication
+- Alerts, news feed, or anything unrelated to fetch scheduling
+- Notifications/logging dashboards beyond basic console/log output for
+  verifying the job ran
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when the existing fetch logic runs on a schedule
+reliably, nothing more.
+
+## Design decisions (already made — don't re-litigate these)
+- **Cadence**: once daily, after US market close, is the default target
+  for this milestone. (If a more frequent EOD-safe cadence, e.g. every
+  few hours during market hours re-pulling the latest daily bar, is
+  trivial given the chosen scheduling approach, that's acceptable too —
+  but don't build intraday-resolution polling here; that's the deferred
+  Finnhub/timeframe work.)
+- **Mechanism**: an in-process scheduler (e.g. APScheduler in Python)
+  running inside the existing FastAPI backend, rather than a separate
+  system-level cron job. Keeps the scheduling logic inside the app and
+  version-controlled with the rest of the code, rather than depending on
+  OS-level configuration that isn't captured in the repo.
+- **Reuse, don't rewrite**: the scheduled job calls the same fetch logic
+  already built in Milestone 3 (loop over `tickers`, upsert into
+  `daily_prices`) — this milestone is about *when* it runs, not changing
+  *what* it does.
+- **Failure handling**: if a fetch for one ticker fails (e.g. yfinance
+  hiccup, network issue), it should not crash the scheduler or block
+  other tickers from being fetched — log the failure and continue.
+
+## Steps
+
+1. **Add scheduler to the backend**
+   - Integrate an in-process scheduler into the FastAPI app, configured
+     to run the existing fetch-all-tickers logic once daily after market
+     close (exact time is flexible — e.g. 4:30pm ET as a reasonable
+     default, adjust if needed).
+   - Scheduler starts when the backend starts, stops cleanly when the
+     backend stops — no orphaned background processes.
+
+2. **Error handling per ticker**
+   - Wrap each ticker's fetch in error handling so one failure (bad
+     symbol, network blip, yfinance hiccup) doesn't stop the rest of the
+     batch from running.
+   - Log failures clearly (which ticker, what error) so they're visible,
+     even if just to console/log file for now.
+
+3. **Manual trigger endpoint (for testing and convenience)**
+   - Add a `POST /fetch/run` endpoint (or similar) that triggers the same
+     fetch job on demand, independent of the schedule — useful for
+     testing without waiting for the scheduled time, and as a manual
+     "refresh now" option going forward.
+
+4. **Verify end to end**
+   - Confirm the scheduler is registered and running when the backend
+     starts (check logs/startup output).
+   - Trigger the job manually via the new endpoint and confirm all three
+     tickers update correctly in `daily_prices`, with the existing
+     upsert logic preventing duplicates.
+   - Simulate a failure for one ticker (e.g. temporarily use an invalid
+     symbol) and confirm the other tickers still fetch successfully and
+     the failure is logged, not silently swallowed or crash-inducing.
+   - Leave the backend running past the scheduled time (or temporarily
+     set it to a near-future time for testing) and confirm the job fires
+     automatically without manual intervention.
+
+## Definition of done
+The backend automatically refreshes daily price data for all watchlist
+tickers on a schedule, without requiring the user to manually run the
+fetch script. A manual trigger endpoint exists for on-demand refresh. A
+single ticker's fetch failure doesn't block the others or crash the
+scheduler. Live/intraday quotes and timeframe selection remain deferred
+to their own future milestones.

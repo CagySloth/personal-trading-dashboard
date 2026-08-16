@@ -1,7 +1,11 @@
 """Fetch daily OHLCV data for all tickers and upsert into SQLite."""
 
+import logging
+
 import yfinance as yf
 from database import get_connection, init_db
+
+logger = logging.getLogger(__name__)
 
 
 def fetch() -> None:
@@ -14,43 +18,47 @@ def fetch() -> None:
         ticker_id = ticker_row["id"]
         symbol = ticker_row["symbol"]
 
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period="max")
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period="max")
 
-        if df.empty:
-            print(f"No data returned for {symbol}")
-            continue
+            if df.empty:
+                logger.warning("No data returned for %s", symbol)
+                continue
 
-        rows = []
-        for date, r in df.iterrows():
-            rows.append((
-                ticker_id,
-                date.strftime("%Y-%m-%d"),
-                round(r["Open"], 4),
-                round(r["High"], 4),
-                round(r["Low"], 4),
-                round(r["Close"], 4),
-                int(r["Volume"]),
-            ))
+            rows = []
+            for date, r in df.iterrows():
+                rows.append((
+                    ticker_id,
+                    date.strftime("%Y-%m-%d"),
+                    round(r["Open"], 4),
+                    round(r["High"], 4),
+                    round(r["Low"], 4),
+                    round(r["Close"], 4),
+                    int(r["Volume"]),
+                ))
 
-        conn.executemany(
-            """
-            INSERT INTO daily_prices (ticker_id, date, open, high, low, close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(ticker_id, date) DO UPDATE SET
-                open   = excluded.open,
-                high   = excluded.high,
-                low    = excluded.low,
-                close  = excluded.close,
-                volume = excluded.volume
-            """,
-            rows,
-        )
-        conn.commit()
-        print(f"Upserted {len(rows)} rows for {symbol}")
+            conn.executemany(
+                """
+                INSERT INTO daily_prices (ticker_id, date, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ticker_id, date) DO UPDATE SET
+                    open   = excluded.open,
+                    high   = excluded.high,
+                    low    = excluded.low,
+                    close  = excluded.close,
+                    volume = excluded.volume
+                """,
+                rows,
+            )
+            conn.commit()
+            logger.info("Upserted %d rows for %s", len(rows), symbol)
+        except Exception:
+            logger.exception("Failed to fetch %s", symbol)
 
     conn.close()
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     fetch()

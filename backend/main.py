@@ -1,20 +1,40 @@
+import logging
 import re
+from contextlib import asynccontextmanager
 from typing import Optional
+
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
 from database import get_connection, init_db
+from fetch import fetch
 from indicators import sma, rsi
 
-app = FastAPI()
+logger = logging.getLogger(__name__)
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(fetch, "cron", hour=16, minute=30, timezone="US/Eastern", id="daily_fetch")
+
+
+@asynccontextmanager
+async def lifespan(app):
+    init_db()
+    scheduler.start()
+    logger.info("Scheduler started — daily fetch at 4:30 PM ET")
+    yield
+    scheduler.shutdown()
+    logger.info("Scheduler stopped")
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
 )
-
-init_db()
 
 
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -84,6 +104,12 @@ def update_settings(body: SettingsUpdate):
     result = dict(row)
     result.pop("id", None)
     return result
+
+
+@app.post("/fetch/run")
+def trigger_fetch():
+    fetch()
+    return {"status": "ok"}
 
 
 @app.get("/tickers")
