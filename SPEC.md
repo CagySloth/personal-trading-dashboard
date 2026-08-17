@@ -763,3 +763,134 @@ real availability window is handled visibly, not silently. Existing
 1-day behavior, the Milestone 6 schedule, and the Milestone 7 startup
 check are all unaffected. 1-minute timeframe, live quotes, and persisted
 timeframe preference remain deferred to future milestones.
+
+# Milestone 9 Spec: Minimal Backtesting Engine
+
+## Context
+Milestones 1-8 are complete: multi-ticker dashboard with configurable
+SMA/RSI indicators and multiple timeframes, backed by a reliable
+scheduled + startup-checked fetch pipeline. This milestone is a
+deliberate scope shift from "view/analysis" to "simulation" — the first
+step toward the longer-term backtesting/algo-strategy goal. It is scoped
+as narrowly as Milestone 1 was: one strategy, one ticker, one timeframe,
+core simulation logic only. This is intentional. Do not generalize beyond
+what's specified below, even though it may seem natural to build a more
+flexible engine.
+
+## Goal
+Simulate a simple SMA-crossover strategy against cached historical daily
+data for one ticker, produce honest performance metrics, and compare the
+result against buy-and-hold on the same ticker and period. Prove the
+simulation logic is correct before any generalization (multiple
+strategies, multiple tickers, cost modeling, etc.).
+
+## Explicitly out of scope for this milestone
+- Any strategy other than SMA crossover
+- Any ticker other than SPY
+- Any timeframe other than daily
+- Transaction costs, slippage, fees, or bid-ask spread modeling — this
+  milestone assumes frictionless trades, which is a known simplification
+  to be corrected in a later milestone, not an oversight
+- Position sizing beyond fully-in / fully-out (no partial sizing,
+  leverage, or shorting)
+- Walk-forward validation, out-of-sample testing, or parameter
+  optimization/tuning
+- A strategy picker, backtest configuration UI, or equity-curve charting
+  — a plain results output (API JSON response, or a simple rendered
+  summary) is sufficient for this milestone
+- Persisting backtest results to SQLite — compute and return on request,
+  no history of past backtest runs needs to be stored yet
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when the SMA-crossover simulation runs correctly on
+SPY daily data and reports honest metrics against a buy-and-hold
+comparison, nothing more.
+
+## Strategy definition (already decided — don't re-litigate this)
+**SMA crossover, using the existing SMA calculation from Milestone 2:**
+- Buy (go fully long) when price closes above the SMA.
+- Sell (go fully flat) when price closes below the SMA.
+- Use the same SMA window already configured in `indicator_settings`
+  from Milestone 5 (default 20-day) — reuse the existing SMA function,
+  don't reimplement it.
+- Start with 100% cash, no leverage. When a buy signal fires, invest all
+  available cash in the ticker. When a sell signal fires, liquidate the
+  full position back to cash.
+- No trades in between signals — the position just holds until the next
+  signal flips it.
+
+## Design decisions (already made — don't re-litigate these)
+- **Frictionless assumption**: trades execute at the closing price of
+  the signal day, with no costs. This will materially overstate returns
+  relative to reality — that's expected and will be addressed by adding
+  cost modeling in a future milestone, not this one.
+- **Benchmark**: alongside the strategy's results, compute buy-and-hold
+  returns for the same ticker over the same exact date range (buy at the
+  start, hold through the end, no trading). This is the comparison that
+  actually matters — not any external product's marketed performance.
+- **Data source**: use the already-cached daily SPY data from SQLite —
+  no new fetch logic needed for this milestone.
+- **Output shape**: a single API endpoint returning a structured result
+  — no need to decide UI/frontend rendering yet.
+
+## Steps
+
+1. **Backtest simulation function** (backend)
+   - Pure function: takes a series of daily OHLCV bars (with pre-computed
+     SMA values, reusing the existing SMA function) and simulates the
+     crossover strategy described above, bar by bar, in chronological
+     order.
+   - Tracks: cash balance, position (in/out), each trade executed (entry
+     date/price, exit date/price), running portfolio value over time.
+   - Returns the full trade log and the resulting equity series (even
+     though charting it isn't in scope yet — having the series makes
+     metrics computation and future charting straightforward).
+   - **Important correctness check**: make sure the signal on a given day
+     only uses data available up to and including that day — no
+     look-ahead (e.g. don't let a signal use a future SMA value that
+     wouldn't have been known at the time). This is one of the core
+     backtesting pitfalls flagged earlier in this project — verify it
+     explicitly, don't assume it's fine because the loop looks
+     sequential.
+
+2. **Metrics calculation**
+   - From the trade log and equity series, compute: total return (%),
+     max drawdown (%), number of trades, win rate (% of trades that were
+     profitable).
+   - Compute the same total return and max drawdown for buy-and-hold on
+     the same ticker/period for comparison.
+
+3. **API endpoint**
+   - `GET /backtest/sma-crossover?ticker=SPY` (ticker param present for
+     clarity even though SPY is the only supported value right now — do
+     not add support for other tickers this milestone).
+   - Returns: strategy metrics, buy-and-hold metrics, and the trade log,
+     as structured JSON.
+   - If requested for a ticker with insufficient cached history to run a
+     meaningful backtest (e.g. fewer bars than the SMA window), return a
+     clear error rather than a misleading result.
+
+4. **Verify end to end**
+   - Hand-check the first 3-5 signals (buy/sell dates) against the
+     actual SPY price and SMA data for those dates, confirming the
+     crossover logic is triggering correctly and using only
+     already-known data (no look-ahead).
+   - Confirm the equity series and final total return are internally
+     consistent (e.g. manually recompute the return of 1-2 trades from
+     the trade log and confirm it matches what's reported).
+   - Confirm the buy-and-hold comparison figure is correct for the same
+     exact date range the strategy was tested over — same start/end
+     dates, not a different or looser range.
+   - Run the endpoint on the full available SPY history and sanity-check
+     that the numbers are plausible (e.g. don't show a suspiciously
+     perfect win rate or return that's an obvious sign of a bug like
+     look-ahead bias).
+
+## Definition of done
+Calling `GET /backtest/sma-crossover?ticker=SPY` returns a correct trade
+log, equity series, and honest performance metrics for the SMA-crossover
+strategy on cached SPY daily data, verified by hand against a handful of
+real signals, alongside a correctly-computed buy-and-hold comparison over
+the identical period. No look-ahead bias in the signal logic. Costs,
+other strategies, other tickers, and any UI beyond raw API output remain
+deferred to future milestones.
