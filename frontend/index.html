@@ -190,6 +190,9 @@
     const rsiPane = chart.panes()[1];
     rsiPane.setHeight(150);
 
+    // Signal markers plugin (v5 API: createSeriesMarkers instead of series.setMarkers).
+    let signalMarkers = null;
+
     // --- Data loading ---
 
     function loadTicker(symbol) {
@@ -202,6 +205,7 @@
             candlestickSeries.setData([]);
             smaSeries.setData([]);
             rsiSeries.setData([]);
+            if (signalMarkers) { signalMarkers.setMarkers([]); }
             const ret = TF_RETENTION[tf];
             if (ret) {
               dataNotice.textContent = `No ${TF_LABELS[tf]} data available for ${symbol}. Yahoo Finance retains ${TF_LABELS[tf]} data for only ${ret}.`;
@@ -230,7 +234,34 @@
               .filter(d => d.rsi !== null)
               .map(d => ({ time: parseTime(d.datetime), value: d.rsi }))
           );
+
+          // Show SMA-crossover signal markers only for SPY on daily timeframe.
+          if (symbol === 'SPY' && tf === '1d') {
+            loadSignals();
+          } else {
+            if (signalMarkers) { signalMarkers.setMarkers([]); }
+          }
+
           chart.timeScale().fitContent();
+        });
+    }
+
+    function loadSignals() {
+      fetch(`${API}/signals/sma-crossover?ticker=SPY`)
+        .then(r => r.json())
+        .then(signals => {
+          const markers = signals.map(s => ({
+            time: s.date,
+            position: s.type === 'buy' ? 'belowBar' : 'aboveBar',
+            color: s.type === 'buy' ? '#2196F3' : '#e91e63',
+            shape: s.type === 'buy' ? 'arrowUp' : 'arrowDown',
+            text: s.type === 'buy' ? 'B' : 'S',
+          }));
+          if (signalMarkers) {
+            signalMarkers.setMarkers(markers);
+          } else {
+            signalMarkers = LightweightCharts.createSeriesMarkers(candlestickSeries, markers);
+          }
         });
     }
 

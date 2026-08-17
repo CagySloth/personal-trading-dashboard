@@ -72,6 +72,28 @@ def sma_crossover(bars: list[dict], sma_window: int) -> dict:
     return {"trades": trades, "equity": equity}
 
 
+def extract_signals(bars: list[dict], sma_window: int) -> list[dict]:
+    """Extract buy/sell signal events from the SMA-crossover simulation.
+
+    Returns a flat list of {date, type, price} dicts, one per signal,
+    in chronological order.
+    """
+    sim = sma_crossover(bars, sma_window)
+    signals: list[dict] = []
+    for trade in sim["trades"]:
+        signals.append({
+            "date": trade["entry_date"],
+            "type": "buy",
+            "price": trade["entry_price"],
+        })
+        signals.append({
+            "date": trade["exit_date"],
+            "type": "sell",
+            "price": trade["exit_price"],
+        })
+    return signals
+
+
 def _max_drawdown(equity: list[dict]) -> float:
     """Compute maximum drawdown (%) from an equity series."""
     if not equity:

@@ -894,3 +894,110 @@ real signals, alongside a correctly-computed buy-and-hold comparison over
 the identical period. No look-ahead bias in the signal logic. Costs,
 other strategies, other tickers, and any UI beyond raw API output remain
 deferred to future milestones.
+
+# Milestone 10 Spec: Signal Markers on Chart
+
+## Context
+Milestone 9 built a backtesting engine that simulates the SMA-crossover
+strategy on SPY daily data and produces a verified trade log (buy/sell
+dates and prices), along with metrics and a buy-and-hold comparison —
+currently only exposed as a raw API response.
+
+This milestone is the first step of a product-structure clarification:
+the chart view and the backtesting engine are becoming two separate
+surfaces that both draw from the same underlying strategy logic. This
+milestone handles the chart-side surface only: overlaying buy/sell signal
+markers from the SMA-crossover strategy onto the existing candlestick
+chart. It does NOT build the separate backtest tab/page — that's the
+next milestone, and it does NOT touch cost modeling — that comes after.
+
+## Goal
+The existing chart (candlesticks + SMA overlay + RSI panel) gains buy/sell
+markers at the dates the SMA-crossover strategy would have traded,
+reusing the exact signal logic already verified in Milestone 9. This is a
+visual, in-context addition to the chart — not a new analysis surface.
+
+## Explicitly out of scope for this milestone
+- The dedicated backtest tab/page (trade log, equity curve, full metrics
+  display) — that is the next milestone, entirely separate from this one
+- Transaction cost modeling — still deferred
+- Any strategy other than SMA crossover
+- Any ticker other than SPY, or any timeframe other than daily — matches
+  Milestone 9's scope exactly; don't expand strategy coverage in this
+  milestone, only add a visual layer for what already exists
+- Interactivity beyond simple markers (e.g. no click-to-see-trade-detail
+  popups, no marker filtering/toggling UI) — plain visual markers only
+- Persisting signals to SQLite — compute on request, same as Milestone 9
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when correct buy/sell markers appear on the SPY chart
+at the right dates, nothing more.
+
+## Design decisions (already made — don't re-litigate these)
+- **Reuse, don't reimplement**: the signal dates come directly from the
+  same simulation function built in Milestone 9 — do not write new
+  signal-detection logic. If Milestone 9's function currently only
+  returns a full backtest result (trade log + metrics + equity series),
+  extract just the buy/sell dates from that existing trade log rather
+  than recomputing them separately.
+- **API shape**: add a lightweight endpoint focused on signals only,
+  e.g. `GET /signals/sma-crossover?ticker=SPY`, returning just the list
+  of signal events (date, type: buy/sell, price) — deliberately smaller
+  than the full Milestone 9 backtest response, since the chart only
+  needs marker placement, not the full metrics payload. This endpoint
+  will likely be reused by the future backtest tab too, so keep it
+  general enough to serve both, but don't build that tab's needs into it
+  yet beyond what's naturally already there (date, type, price).
+- **Rendering**: use lightweight-charts' built-in marker support on the
+  candlestick series (e.g. up-arrow/green for buy, down-arrow/red for
+  sell, or similar clear visual distinction) — check the library's
+  current marker API during implementation rather than assuming a
+  specific method name.
+- **Where markers apply**: only on the daily SPY chart, since that's the
+  only ticker/timeframe the strategy currently supports. If the user
+  switches to a different ticker or timeframe (from Milestone 3/8 work),
+  markers should simply not appear rather than showing incorrect or
+  stale signals — don't try to generalize signal support to other
+  tickers/timeframes in this milestone.
+
+## Steps
+
+1. **Extract signal-only data** (backend)
+   - From the existing Milestone 9 simulation output, isolate just the
+     buy/sell events (date, type, execution price) without the full
+     metrics/equity payload.
+
+2. **Signals endpoint**
+   - `GET /signals/sma-crossover?ticker=SPY` returns the signal list as
+     structured JSON. If called for anything other than SPY, return a
+     clear "not supported yet" response rather than an error that looks
+     like a bug (matches Milestone 9's ticker restriction).
+
+3. **Frontend marker rendering**
+   - When the chart is showing SPY on the daily timeframe, fetch signals
+     from the new endpoint and render them as markers on the
+     candlestick series at the correct dates.
+   - When the chart is showing any other ticker or timeframe, don't
+     fetch or show markers — no broken requests, no leftover markers
+     from a previous view.
+   - Markers should visually distinguish buy vs. sell clearly (e.g.
+     color and/or shape) without needing a legend to interpret at a
+     glance.
+
+4. **Verify end to end**
+   - Confirm the markers on the chart line up exactly with the buy/sell
+     dates already hand-verified in Milestone 9 — this should be a
+     direct visual confirmation of numbers you've already checked, not
+     new verification work.
+   - Confirm switching to AAPL or QQQ (or a non-daily timeframe) removes
+     the markers cleanly, with no errors and no stale/incorrect markers
+     left over from SPY.
+   - Confirm switching back to SPY daily restores the markers correctly.
+
+## Definition of done
+The SPY daily chart shows correctly-placed, visually clear buy/sell
+markers matching the SMA-crossover signals already verified in Milestone
+9. Other tickers/timeframes show no markers, without errors. The
+underlying signal logic is reused from Milestone 9, not reimplemented.
+The dedicated backtest results tab and cost modeling remain separate,
+deferred milestones.

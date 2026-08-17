@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from database import get_connection, init_db, is_data_stale
-from backtest import run_backtest
+from backtest import run_backtest, extract_signals
 from fetch import fetch, ensure_fresh, TIMEFRAME_CONFIG
 from indicators import sma, rsi
 
@@ -244,3 +244,45 @@ def backtest_sma_crossover(ticker: str = Query("SPY")):
         )
 
     return run_backtest(data, sma_window)
+
+
+@app.get("/signals/sma-crossover")
+def signals_sma_crossover(ticker: str = Query("SPY")):
+    symbol = ticker.upper()
+    if symbol != "SPY":
+        raise HTTPException(
+            status_code=422,
+            detail="Only SPY is supported for signals in this milestone",
+        )
+
+    conn = get_connection()
+
+    row = conn.execute(
+        "SELECT id FROM tickers WHERE symbol = ?", (symbol,)
+    ).fetchone()
+
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail=f"Ticker {symbol} not found")
+
+    ticker_id = row["id"]
+    bars = conn.execute(
+        """
+        SELECT datetime, open, high, low, close, volume
+        FROM prices
+        WHERE ticker_id = ? AND timeframe = '1d'
+        ORDER BY datetime ASC
+        """,
+        (ticker_id,),
+    ).fetchall()
+
+    settings = conn.execute("SELECT sma_window FROM indicator_settings").fetchone()
+    conn.close()
+
+    sma_window = settings["sma_window"]
+    data = [dict(r) for r in bars]
+
+    if len(data) < sma_window + 1:
+        return []
+
+    return extract_signals(data, sma_window)
