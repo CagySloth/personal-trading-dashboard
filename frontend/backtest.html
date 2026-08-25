@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backtest — Trading Dashboard</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; color: #222; }
+    #nav { display: flex; gap: 0; background: #1e1e1e; padding: 0 12px; }
+    #nav a {
+      color: #aaa; text-decoration: none; padding: 8px 16px; font-size: 14px;
+    }
+    #nav a.active { color: #fff; border-bottom: 2px solid #2962FF; }
+    #nav a:hover { color: #fff; }
+
+    #content { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 20px; margin: 0 0 20px; }
+
+    /* Metrics cards */
+    #metrics { display: flex; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
+    .metric-card {
+      flex: 1; min-width: 200px;
+      border: 1px solid #ddd; border-radius: 8px; padding: 16px;
+    }
+    .metric-card h3 { margin: 0 0 12px; font-size: 14px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
+    .metric-row .label { color: #666; }
+    .metric-row .value { font-weight: 600; }
+
+    /* Equity curve */
+    #equity-chart { width: 100%; height: 300px; margin-bottom: 24px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+
+    /* Trade log */
+    #trade-section h2 { font-size: 16px; margin: 0 0 8px; }
+    #trade-count { font-size: 13px; color: #666; margin-bottom: 8px; }
+    #trade-table-wrap { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th {
+      position: sticky; top: 0; background: #f5f5f5;
+      text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd;
+      font-weight: 600; color: #555;
+    }
+    tbody td { padding: 6px 12px; border-bottom: 1px solid #eee; }
+    tbody tr:hover { background: #f9f9f9; }
+    .positive { color: #2e7d32; }
+    .negative { color: #c62828; }
+
+    #loading { text-align: center; padding: 60px; color: #888; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <nav id="nav">
+    <a href="index.html">Chart</a>
+    <a href="backtest.html" class="active">Backtest</a>
+  </nav>
+
+  <div id="content">
+    <div id="loading">Loading backtest results...</div>
+
+    <div id="results" style="display:none">
+      <h1>SMA Crossover — SPY (Daily)</h1>
+
+      <div id="metrics">
+        <div class="metric-card">
+          <h3>Strategy</h3>
+          <div class="metric-row"><span class="label">Total Return</span><span class="value" id="s-return"></span></div>
+          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="s-drawdown"></span></div>
+          <div class="metric-row"><span class="label">Trades</span><span class="value" id="s-trades"></span></div>
+          <div class="metric-row"><span class="label">Win Rate</span><span class="value" id="s-winrate"></span></div>
+        </div>
+        <div class="metric-card">
+          <h3>Buy &amp; Hold</h3>
+          <div class="metric-row"><span class="label">Total Return</span><span class="value" id="bh-return"></span></div>
+          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="bh-drawdown"></span></div>
+          <div class="metric-row"><span class="label">Period</span><span class="value" id="bh-period"></span></div>
+        </div>
+      </div>
+
+      <div id="equity-chart"></div>
+
+      <div id="trade-section">
+        <h2>Trade Log</h2>
+        <div id="trade-count"></div>
+        <div id="trade-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Entry Date</th>
+                <th>Entry Price</th>
+                <th>Exit Date</th>
+                <th>Exit Price</th>
+                <th>Return</th>
+              </tr>
+            </thead>
+            <tbody id="trade-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <script>
+    const API = 'http://127.0.0.1:8000';
+
+    fetch(`${API}/backtest/sma-crossover?ticker=SPY`)
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('results').style.display = 'block';
+
+        const s = data.strategy;
+        const bh = data.buy_and_hold;
+
+        // --- Metrics ---
+        document.getElementById('s-return').textContent = s.total_return_pct.toFixed(2) + '%';
+        document.getElementById('s-drawdown').textContent = s.max_drawdown_pct.toFixed(2) + '%';
+        document.getElementById('s-trades').textContent = s.num_trades;
+        document.getElementById('s-winrate').textContent = s.win_rate_pct.toFixed(2) + '%';
+
+        document.getElementById('bh-return').textContent = bh.total_return_pct.toFixed(2) + '%';
+        document.getElementById('bh-drawdown').textContent = bh.max_drawdown_pct.toFixed(2) + '%';
+        document.getElementById('bh-period').textContent = bh.start_date + ' to ' + bh.end_date;
+
+        // --- Equity curve ---
+        const chartEl = document.getElementById('equity-chart');
+        const chart = LightweightCharts.createChart(chartEl, {
+          width: chartEl.clientWidth,
+          height: 300,
+        });
+        const equitySeries = chart.addSeries(LightweightCharts.LineSeries, {
+          color: '#2962FF',
+          lineWidth: 2,
+        });
+        equitySeries.setData(
+          data.equity.map(e => ({ time: e.date, value: e.value }))
+        );
+        chart.timeScale().fitContent();
+
+        window.addEventListener('resize', () => {
+          chart.resize(chartEl.clientWidth, 300);
+        });
+
+        // --- Trade log ---
+        const tbody = document.getElementById('trade-body');
+        document.getElementById('trade-count').textContent = data.trades.length + ' trades';
+
+        data.trades.forEach((t, i) => {
+          const tr = document.createElement('tr');
+          const retClass = t.return_pct >= 0 ? 'positive' : 'negative';
+          const retSign = t.return_pct >= 0 ? '+' : '';
+          tr.innerHTML =
+            `<td>${i + 1}</td>` +
+            `<td>${t.entry_date}</td>` +
+            `<td>${t.entry_price.toFixed(2)}</td>` +
+            `<td>${t.exit_date}</td>` +
+            `<td>${t.exit_price.toFixed(2)}</td>` +
+            `<td class="${retClass}">${retSign}${t.return_pct.toFixed(2)}%</td>`;
+          tbody.appendChild(tr);
+        });
+      });
+  </script>
+</body>
+</html>

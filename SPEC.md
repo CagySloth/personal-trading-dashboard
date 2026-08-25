@@ -1001,3 +1001,111 @@ markers matching the SMA-crossover signals already verified in Milestone
 underlying signal logic is reused from Milestone 9, not reimplemented.
 The dedicated backtest results tab and cost modeling remain separate,
 deferred milestones.
+
+# Milestone 11 Spec: Backtest Results Tab
+
+## Context
+Milestone 9 built the backtesting engine (SMA-crossover on SPY daily
+data) with a verified trade log, metrics, and buy-and-hold comparison,
+currently only reachable as a raw API response. Milestone 10 added
+buy/sell markers to the chart view as a lightweight visual layer. This
+milestone builds the second, separate surface described in the product
+vision: a dedicated backtest results page, independent from the chart
+view, showing the full analytical detail — trade log, equity curve, and
+metrics. The chart page and this page are two different consumers of the
+same underlying engine; neither should depend on the other's UI.
+
+## Goal
+A new page/tab, separate from the chart view, that displays the full
+Milestone 9 backtest results for the SMA-crossover strategy on SPY: an
+equity curve, the trade log, and summary metrics (including the
+buy-and-hold comparison) — pulled from the existing backtest endpoint,
+not recomputed.
+
+## Explicitly out of scope for this milestone
+- Transaction cost modeling — still deferred to after this milestone
+- Any strategy other than SMA crossover
+- Any ticker other than SPY
+- A strategy picker, configuration UI, or the ability to run a backtest
+  with different parameters from this page — this milestone displays the
+  existing fixed backtest, it doesn't add configurability
+- Persisting backtest runs/history to SQLite — this page calls the
+  existing endpoint fresh each time it's viewed, same as Milestone 9's
+  behavior; no "past runs" list
+- Any change to the chart page or Milestone 10's signal markers — this
+  milestone is additive, a new page, not a modification to the existing
+  chart view
+- Advanced charting interactivity on the equity curve (zoom, tooltips
+  beyond basic hover if trivial) — a plain, readable line chart is
+  sufficient
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when the backtest results are viewable on their own
+dedicated page with correct data, nothing more.
+
+## Design decisions (already made — don't re-litigate these)
+- **Separate page/route**: this is a distinct page (e.g. `/backtest` if
+  using client-side routing, or a separate simple nav tab depending on
+  how the frontend is currently structured) — not a panel bolted onto
+  the existing chart page. Add simple navigation (e.g. two links/tabs:
+  "Chart" and "Backtest") so the user can move between them.
+  **No shared state required between the two pages** — the backtest
+  page doesn't need to know which ticker/timeframe is currently selected
+  on the chart page, since the backtest is currently fixed to SPY daily
+  regardless of chart state.
+- **Data source**: this page calls the existing Milestone 9
+  `GET /backtest/sma-crossover?ticker=SPY` endpoint directly — no new
+  backend logic needed for this milestone, this is purely a frontend
+  presentation milestone.
+- **Equity curve rendering**: use lightweight-charts (already a
+  dependency) for consistency with the rest of the app, rendered as a
+  simple line series from the equity series already returned by the
+  Milestone 9 endpoint.
+- **Trade log display**: a plain table is sufficient — columns for
+  entry date/price, exit date/price, and per-trade return. No sorting/
+  filtering UI required, though trivial default sorting (chronological)
+  is expected.
+- **Metrics display**: show total return, max drawdown, number of
+  trades, and win rate for the strategy, alongside the same figures for
+  buy-and-hold, positioned so they're easy to compare side by side (not
+  buried in separate sections).
+
+## Steps
+
+1. **Add navigation between the two pages**
+   - Simple nav (tabs or links) so the user can switch between the
+     existing chart view and the new backtest page.
+
+2. **Backtest page: fetch and display metrics**
+   - Call the existing backtest endpoint on page load.
+   - Display strategy metrics and buy-and-hold metrics clearly
+     side-by-side (total return, max drawdown, trade count, win rate).
+
+3. **Backtest page: equity curve**
+   - Render the equity series from the endpoint response as a line chart
+     using lightweight-charts.
+
+4. **Backtest page: trade log table**
+   - Render the trade log as a table (entry date/price, exit date/price,
+     per-trade return), chronologically ordered.
+
+5. **Verify end to end**
+   - Confirm the metrics shown on this page match exactly what Milestone
+     9's endpoint returns and what was hand-verified there — no
+     transformation or recalculation should change the numbers.
+   - Confirm the equity curve visually matches the trade log (e.g.
+     portfolio value should step up/down at the trade dates shown in the
+     table, not drift inconsistently).
+   - Confirm navigating between the chart page and this page works
+     cleanly in both directions, and that neither page's state affects
+     the other (e.g. switching tickers on the chart page doesn't change
+     anything on the backtest page, since it's still fixed to SPY).
+
+## Definition of done
+A separate backtest page is reachable via simple navigation from the
+chart view, displaying the SMA-crossover strategy's equity curve, full
+trade log, and metrics (with buy-and-hold comparison) for SPY — all
+pulled directly from the existing Milestone 9 endpoint with no numbers
+changed in transit. The chart page and Milestone 10's markers are
+unaffected. Cost modeling, other strategies, other tickers, and any
+backtest-configuration UI remain deferred to future milestones.
