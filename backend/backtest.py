@@ -3,7 +3,7 @@
 from indicators import sma
 
 
-def sma_crossover(bars: list[dict], sma_window: int) -> dict:
+def sma_crossover(bars: list[dict], sma_window: int, cost_pct: float = 0.0) -> dict:
     """Simulate an SMA-crossover strategy on daily bars.
 
     Strategy rules:
@@ -15,6 +15,8 @@ def sma_crossover(bars: list[dict], sma_window: int) -> dict:
         bars: list of dicts with at least 'datetime' and 'close' keys,
               in chronological order.
         sma_window: SMA look-back window (reuses the existing SMA function).
+        cost_pct: per-trade commission as a fraction (e.g. 0.001 = 0.1%),
+                  applied to trade value at both entry and exit.
 
     Returns a dict with:
         trades:  list of {entry_date, entry_price, exit_date, exit_price, return_pct}
@@ -46,16 +48,20 @@ def sma_crossover(bars: list[dict], sma_window: int) -> dict:
             continue
 
         if not in_position and price > sma_val:
-            # Buy signal: invest all cash.
-            shares = cash / price
+            # Buy signal: invest all cash, minus entry commission.
+            cost = cash * cost_pct
+            investable = cash - cost
+            shares = investable / price
             cash = 0.0
             in_position = True
             entry_date = bar["datetime"]
             entry_price = price
 
         elif in_position and price < sma_val:
-            # Sell signal: liquidate entire position.
-            cash = shares * price
+            # Sell signal: liquidate entire position, minus exit commission.
+            gross = shares * price
+            cost = gross * cost_pct
+            cash = gross - cost
             shares = 0.0
             in_position = False
             ret = (price - entry_price) / entry_price * 100
@@ -134,20 +140,11 @@ def _buy_and_hold(bars: list[dict]) -> dict:
     }
 
 
-def run_backtest(bars: list[dict], sma_window: int) -> dict:
-    """Run the SMA-crossover backtest and return full results with metrics.
-
-    Returns a dict with:
-        strategy:  {total_return_pct, max_drawdown_pct, num_trades, win_rate_pct}
-        buy_and_hold: {total_return_pct, max_drawdown_pct, start_date, end_date}
-        trades:    the trade log from the simulation
-        equity:    the daily equity series from the simulation
-    """
-    sim = sma_crossover(bars, sma_window)
+def _build_result(sim: dict) -> dict:
+    """Build metrics + trade log + equity from a simulation result."""
     trades = sim["trades"]
     equity = sim["equity"]
 
-    # Strategy metrics.
     start_value = equity[0]["value"] if equity else 0
     end_value = equity[-1]["value"] if equity else 0
     total_return = (end_value - start_value) / start_value * 100 if start_value else 0
@@ -155,18 +152,39 @@ def run_backtest(bars: list[dict], sma_window: int) -> dict:
     winning = sum(1 for t in trades if t["return_pct"] > 0)
     win_rate = (winning / len(trades) * 100) if trades else 0
 
-    strategy_metrics = {
-        "total_return_pct": round(total_return, 4),
-        "max_drawdown_pct": _max_drawdown(equity),
-        "num_trades": len(trades),
-        "win_rate_pct": round(win_rate, 4),
+    return {
+        "strategy": {
+            "total_return_pct": round(total_return, 4),
+            "max_drawdown_pct": _max_drawdown(equity),
+            "num_trades": len(trades),
+            "win_rate_pct": round(win_rate, 4),
+        },
+        "trades": trades,
+        "equity": equity,
     }
+
+
+DEFAULT_COST_PCT = 0.001  # 0.1% per trade
+
+
+def run_backtest(bars: list[dict], sma_window: int) -> dict:
+    """Run the SMA-crossover backtest and return full results with metrics.
+
+    Returns a dict with:
+        frictionless: {strategy, trades, equity} — cost_pct=0
+        cost_adjusted: {strategy, trades, equity} — cost_pct=0.1%
+        buy_and_hold: {total_return_pct, max_drawdown_pct, start_date, end_date}
+    """
+    frictionless_sim = sma_crossover(bars, sma_window, cost_pct=0.0)
+    cost_adjusted_sim = sma_crossover(bars, sma_window, cost_pct=DEFAULT_COST_PCT)
+
+    frictionless = _build_result(frictionless_sim)
+    cost_adjusted = _build_result(cost_adjusted_sim)
 
     bnh_metrics = _buy_and_hold(bars)
 
     return {
-        "strategy": strategy_metrics,
+        "frictionless": frictionless,
+        "cost_adjusted": cost_adjusted,
         "buy_and_hold": bnh_metrics,
-        "trades": trades,
-        "equity": equity,
     }

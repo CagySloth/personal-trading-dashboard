@@ -1109,3 +1109,117 @@ pulled directly from the existing Milestone 9 endpoint with no numbers
 changed in transit. The chart page and Milestone 10's markers are
 unaffected. Cost modeling, other strategies, other tickers, and any
 backtest-configuration UI remain deferred to future milestones.
+
+# Milestone 12 Spec: Transaction Cost Modeling
+
+## Context
+Milestone 9 built the SMA-crossover backtesting engine on an explicitly
+frictionless assumption (no fees, no slippage) — a known, intentional
+simplification flagged at the time. Milestone 11 gave backtest results a
+dedicated page, separate from the chart view. This milestone closes the
+frictionless gap: the engine now also computes cost-adjusted results, and
+the backtest page shows both side by side so the actual cost sensitivity
+of the strategy is visible, not hidden behind a single optimistic number.
+
+## Goal
+The existing SMA-crossover simulation produces both a frictionless result
+(as before) and a cost-adjusted result (with a simple per-trade
+commission applied), and the backtest page displays both together so the
+user can see exactly how much of the strategy's apparent performance
+depends on ignoring trading costs.
+
+## Explicitly out of scope for this milestone
+- Slippage modeling (price impact / worse-than-close fills) — deferred;
+  this milestone covers commission-style costs only, since slippage is
+  harder to estimate honestly without real fill data
+- Any strategy other than SMA crossover
+- Any ticker other than SPY
+- A UI to configure the cost rate — the cost rate is a backend parameter
+  with a sensible default, not yet exposed for the user to change (same
+  "parameterize now, expose later" pattern used for indicator settings
+  before Milestone 5 existed)
+- Any change to Milestone 10's chart markers — signals themselves don't
+  change, only the performance numbers derived from them
+- Persisting backtest results to SQLite — still computed fresh per
+  request, as in Milestone 9
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when frictionless and cost-adjusted results are both
+correctly computed and both visible on the backtest page.
+
+## Design decisions (already made — don't re-litigate these)
+- **Cost model**: a flat percentage commission (default 0.1%) applied to
+  the trade value on both entry and exit. No fixed-dollar fee, no
+  slippage — the simplest honest approximation, not a precise model of
+  any specific broker.
+- **Implementation as a parameter**: the cost rate should be a parameter
+  to the simulation function (e.g. `cost_pct=0.001`), not a hardcoded
+  constant — even though there's no UI to change it yet, this keeps the
+  door open for later configurability without a rewrite.
+- **Both results computed together**: the same simulation logic and
+  trade log/signal dates are reused for both frictionless and
+  cost-adjusted runs — the only difference is whether the cost is
+  deducted at each trade. Don't duplicate the simulation logic; run it
+  with cost_pct=0 for the frictionless case and cost_pct=0.001 (default)
+  for the cost-adjusted case, or an equivalent single-pass approach if
+  cleaner.
+- **API shape**: extend the existing `GET /backtest/sma-crossover`
+  response to include both result sets (e.g. a `frictionless` and a
+  `cost_adjusted` object, each with its own metrics, trade log, and
+  equity series) rather than requiring two separate calls.
+- **Display**: the backtest page (Milestone 11) shows both results
+  side by side (e.g. two columns, or a toggle between them) — pick
+  whichever is simpler to implement clearly. Side-by-side is preferred
+  if straightforward, since direct comparison is the point of this
+  milestone.
+
+## Steps
+
+1. **Extend the simulation function** (backend)
+   - Add a `cost_pct` parameter to the existing Milestone 9 simulation
+     function. When non-zero, deduct `cost_pct * trade value` from the
+     portfolio at both the entry and exit of each trade.
+   - Confirm the function still produces the exact same output as
+     Milestone 9 when `cost_pct=0` — this is a correctness check that
+     the change is additive, not a rewrite of existing verified logic.
+
+2. **Run both variants and extend the API response**
+   - Call the simulation twice (or via one pass computing both, if
+     cleaner): once frictionless (`cost_pct=0`), once cost-adjusted
+     (`cost_pct=0.001` default).
+   - Update `GET /backtest/sma-crossover?ticker=SPY` to return both
+     result sets in the response, each with its own metrics, trade log,
+     and equity series. Buy-and-hold comparison stays as a single
+     result (it isn't affected by a trading cost model, since it
+     involves only one trade).
+
+3. **Update the backtest page** (frontend)
+   - Display both the frictionless and cost-adjusted equity curves,
+     metrics, and trade logs, positioned so they're easy to compare
+     directly (side-by-side columns, or a clearly labeled toggle).
+   - Make it visually obvious which numbers are which — don't just show
+     two unlabeled tables.
+
+4. **Verify end to end**
+   - Confirm the frictionless results are byte-for-byte identical to
+     what Milestone 9/11 already showed and verified — nothing should
+     have silently changed for the cost_pct=0 case.
+   - Hand-check one specific trade's cost-adjusted net return: take its
+     entry/exit prices, apply the 0.1% cost at both ends manually, and
+     confirm it matches what the cost-adjusted trade log reports.
+   - Confirm the cost-adjusted total return is lower than the
+     frictionless total return by an amount consistent with the number
+     of trades (more trades → more cumulative cost drag) — sanity-check
+     this relationship makes sense given the trade count from the
+     existing verified trade log.
+   - Confirm the buy-and-hold comparison figure is unchanged and
+     identical between the two displayed result sets, since it isn't
+     affected by the cost model.
+
+## Definition of done
+The backtest page shows both frictionless and cost-adjusted results for
+the SMA-crossover strategy on SPY, clearly labeled and easy to compare.
+The cost-adjusted numbers are verified correct by hand against a
+manually recomputed trade. Frictionless results are unchanged from
+Milestones 9 and 11. Slippage modeling, cost configurability UI, other
+strategies, and other tickers remain deferred to future milestones.

@@ -17,9 +17,9 @@
     h1 { font-size: 20px; margin: 0 0 20px; }
 
     /* Metrics cards */
-    #metrics { display: flex; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
+    #metrics { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
     .metric-card {
-      flex: 1; min-width: 200px;
+      flex: 1; min-width: 180px;
       border: 1px solid #ddd; border-radius: 8px; padding: 16px;
     }
     .metric-card h3 { margin: 0 0 12px; font-size: 14px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -28,7 +28,10 @@
     .metric-row .value { font-weight: 600; }
 
     /* Equity curve */
-    #equity-chart { width: 100%; height: 300px; margin-bottom: 24px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+    #equity-chart { width: 100%; height: 300px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+    #equity-legend { font-size: 13px; color: #555; margin-bottom: 24px; display: flex; gap: 24px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-swatch { width: 20px; height: 3px; border-radius: 1px; }
 
     /* Trade log */
     #trade-section h2 { font-size: 16px; margin: 0 0 8px; }
@@ -62,11 +65,18 @@
 
       <div id="metrics">
         <div class="metric-card">
-          <h3>Strategy</h3>
-          <div class="metric-row"><span class="label">Total Return</span><span class="value" id="s-return"></span></div>
-          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="s-drawdown"></span></div>
-          <div class="metric-row"><span class="label">Trades</span><span class="value" id="s-trades"></span></div>
-          <div class="metric-row"><span class="label">Win Rate</span><span class="value" id="s-winrate"></span></div>
+          <h3>Frictionless</h3>
+          <div class="metric-row"><span class="label">Total Return</span><span class="value" id="fl-return"></span></div>
+          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="fl-drawdown"></span></div>
+          <div class="metric-row"><span class="label">Trades</span><span class="value" id="fl-trades"></span></div>
+          <div class="metric-row"><span class="label">Win Rate</span><span class="value" id="fl-winrate"></span></div>
+        </div>
+        <div class="metric-card">
+          <h3>Cost-Adjusted (0.1%)</h3>
+          <div class="metric-row"><span class="label">Total Return</span><span class="value" id="ca-return"></span></div>
+          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="ca-drawdown"></span></div>
+          <div class="metric-row"><span class="label">Trades</span><span class="value" id="ca-trades"></span></div>
+          <div class="metric-row"><span class="label">Win Rate</span><span class="value" id="ca-winrate"></span></div>
         </div>
         <div class="metric-card">
           <h3>Buy &amp; Hold</h3>
@@ -77,6 +87,10 @@
       </div>
 
       <div id="equity-chart"></div>
+      <div id="equity-legend">
+        <div class="legend-item"><span class="legend-swatch" style="background:#2962FF"></span> Frictionless</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:#FF6D00"></span> Cost-Adjusted</div>
+      </div>
 
       <div id="trade-section">
         <h2>Trade Log</h2>
@@ -110,43 +124,60 @@
         document.getElementById('loading').style.display = 'none';
         document.getElementById('results').style.display = 'block';
 
-        const s = data.strategy;
+        const fl = data.frictionless.strategy;
+        const ca = data.cost_adjusted.strategy;
         const bh = data.buy_and_hold;
 
         // --- Metrics ---
-        document.getElementById('s-return').textContent = s.total_return_pct.toFixed(2) + '%';
-        document.getElementById('s-drawdown').textContent = s.max_drawdown_pct.toFixed(2) + '%';
-        document.getElementById('s-trades').textContent = s.num_trades;
-        document.getElementById('s-winrate').textContent = s.win_rate_pct.toFixed(2) + '%';
+        document.getElementById('fl-return').textContent = fl.total_return_pct.toFixed(2) + '%';
+        document.getElementById('fl-drawdown').textContent = fl.max_drawdown_pct.toFixed(2) + '%';
+        document.getElementById('fl-trades').textContent = fl.num_trades;
+        document.getElementById('fl-winrate').textContent = fl.win_rate_pct.toFixed(2) + '%';
+
+        document.getElementById('ca-return').textContent = ca.total_return_pct.toFixed(2) + '%';
+        document.getElementById('ca-drawdown').textContent = ca.max_drawdown_pct.toFixed(2) + '%';
+        document.getElementById('ca-trades').textContent = ca.num_trades;
+        document.getElementById('ca-winrate').textContent = ca.win_rate_pct.toFixed(2) + '%';
 
         document.getElementById('bh-return').textContent = bh.total_return_pct.toFixed(2) + '%';
         document.getElementById('bh-drawdown').textContent = bh.max_drawdown_pct.toFixed(2) + '%';
         document.getElementById('bh-period').textContent = bh.start_date + ' to ' + bh.end_date;
 
-        // --- Equity curve ---
+        // --- Equity curves (both on one chart) ---
         const chartEl = document.getElementById('equity-chart');
         const chart = LightweightCharts.createChart(chartEl, {
           width: chartEl.clientWidth,
           height: 300,
         });
-        const equitySeries = chart.addSeries(LightweightCharts.LineSeries, {
+
+        const flSeries = chart.addSeries(LightweightCharts.LineSeries, {
           color: '#2962FF',
           lineWidth: 2,
         });
-        equitySeries.setData(
-          data.equity.map(e => ({ time: e.date, value: e.value }))
+        flSeries.setData(
+          data.frictionless.equity.map(e => ({ time: e.date, value: e.value }))
         );
+
+        const caSeries = chart.addSeries(LightweightCharts.LineSeries, {
+          color: '#FF6D00',
+          lineWidth: 2,
+        });
+        caSeries.setData(
+          data.cost_adjusted.equity.map(e => ({ time: e.date, value: e.value }))
+        );
+
         chart.timeScale().fitContent();
 
         window.addEventListener('resize', () => {
           chart.resize(chartEl.clientWidth, 300);
         });
 
-        // --- Trade log ---
+        // --- Trade log (same trades for both variants) ---
+        const trades = data.frictionless.trades;
         const tbody = document.getElementById('trade-body');
-        document.getElementById('trade-count').textContent = data.trades.length + ' trades';
+        document.getElementById('trade-count').textContent = trades.length + ' trades';
 
-        data.trades.forEach((t, i) => {
+        trades.forEach((t, i) => {
           const tr = document.createElement('tr');
           const retClass = t.return_pct >= 0 ? 'positive' : 'negative';
           const retSign = t.return_pct >= 0 ? '+' : '';
