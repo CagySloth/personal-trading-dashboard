@@ -1,7 +1,8 @@
-"""Fetch OHLCV data for tickers and upsert into SQLite."""
+"""Fetch OHLCV data, dividends, splits, and fundamentals for tickers."""
 
 import logging
 import time
+from datetime import datetime, timezone
 
 import yfinance as yf
 from database import get_connection, init_db
@@ -121,11 +122,148 @@ def fetch(timeframe: str = "1d") -> None:
     conn.close()
 
 
+def fetch_dividends(conn, ticker_id: int, symbol: str) -> int:
+    """Fetch and upsert dividend history for a single ticker. Returns row count."""
+    ticker = yf.Ticker(symbol)
+    divs = ticker.dividends
+
+    if divs.empty:
+        return 0
+
+    rows = []
+    for dt, amount in divs.items():
+        rows.append((ticker_id, dt.strftime("%Y-%m-%d"), round(float(amount), 6)))
+
+    conn.executemany(
+        """
+        INSERT INTO dividends (ticker_id, date, amount)
+        VALUES (?, ?, ?)
+        ON CONFLICT(ticker_id, date) DO UPDATE SET amount = excluded.amount
+        """,
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+def fetch_splits(conn, ticker_id: int, symbol: str) -> int:
+    """Fetch and upsert split history for a single ticker. Returns row count."""
+    ticker = yf.Ticker(symbol)
+    splits = ticker.splits
+
+    if splits.empty:
+        return 0
+
+    rows = []
+    for dt, ratio in splits.items():
+        rows.append((ticker_id, dt.strftime("%Y-%m-%d"), round(float(ratio), 6)))
+
+    conn.executemany(
+        """
+        INSERT INTO splits (ticker_id, date, ratio)
+        VALUES (?, ?, ?)
+        ON CONFLICT(ticker_id, date) DO UPDATE SET ratio = excluded.ratio
+        """,
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+FUNDAMENTALS_STALE_DAYS = 7
+
+
+def fetch_fundamentals(conn, ticker_id: int, symbol: str) -> bool:
+    """Fetch and upsert fundamentals snapshot if stale (> 7 days old).
+
+    Returns True if an update was performed, False if skipped.
+    """
+    row = conn.execute(
+        "SELECT last_updated FROM fundamentals WHERE ticker_id = ?",
+        (ticker_id,),
+    ).fetchone()
+
+    if row is not None:
+        try:
+            last = datetime.strptime(row["last_updated"], "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+            age_days = (datetime.now(timezone.utc) - last).total_seconds() / 86400
+            if age_days < FUNDAMENTALS_STALE_DAYS:
+                return False
+        except ValueError:
+            pass  # can't parse — treat as stale, re-fetch
+
+    ticker = yf.Ticker(symbol)
+    info = ticker.info
+
+    market_cap = info.get("marketCap")
+    sector = info.get("sector")
+    industry = info.get("industry")
+    pe_ratio = info.get("trailingPE")
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    conn.execute(
+        """
+        INSERT INTO fundamentals (ticker_id, market_cap, sector, industry, pe_ratio, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ticker_id) DO UPDATE SET
+            market_cap   = excluded.market_cap,
+            sector       = excluded.sector,
+            industry     = excluded.industry,
+            pe_ratio     = excluded.pe_ratio,
+            last_updated = excluded.last_updated
+        """,
+        (ticker_id, market_cap, sector, industry, pe_ratio, now_str),
+    )
+    conn.commit()
+    return True
+
+
+def fetch_extras() -> None:
+    """Fetch dividends, splits, and fundamentals for all tickers."""
+    init_db()
+    conn = get_connection()
+
+    tickers = conn.execute("SELECT id, symbol FROM tickers ORDER BY id").fetchall()
+
+    for ticker_row in tickers:
+        ticker_id = ticker_row["id"]
+        symbol = ticker_row["symbol"]
+
+        try:
+            count = fetch_dividends(conn, ticker_id, symbol)
+            if count:
+                logger.info("Upserted %d dividend rows for %s", count, symbol)
+        except Exception:
+            logger.exception("Failed to fetch dividends for %s", symbol)
+
+        try:
+            count = fetch_splits(conn, ticker_id, symbol)
+            if count:
+                logger.info("Upserted %d split rows for %s", count, symbol)
+        except Exception:
+            logger.exception("Failed to fetch splits for %s", symbol)
+
+        try:
+            updated = fetch_fundamentals(conn, ticker_id, symbol)
+            if updated:
+                logger.info("Updated fundamentals for %s", symbol)
+            else:
+                logger.info("Fundamentals for %s still fresh — skipping", symbol)
+        except Exception:
+            logger.exception("Failed to fetch fundamentals for %s", symbol)
+
+    conn.close()
+
+
 def fetch_all_timeframes() -> None:
-    """Fetch data for all tickers across all supported timeframes (1d, 1h, 5m)."""
+    """Fetch data for all tickers across all supported timeframes (1d, 1h, 5m),
+    plus dividends, splits, and fundamentals."""
     for tf in TIMEFRAME_CONFIG:
         logger.info("Fetching all tickers for timeframe %s", tf)
         fetch(tf)
+    fetch_extras()
 
 
 if __name__ == "__main__":

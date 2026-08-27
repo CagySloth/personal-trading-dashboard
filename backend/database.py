@@ -44,6 +44,29 @@ def init_db() -> None:
         );
 
         INSERT OR IGNORE INTO indicator_settings (id) VALUES (1);
+
+        CREATE TABLE IF NOT EXISTS dividends (
+            ticker_id INTEGER NOT NULL REFERENCES tickers(id),
+            date      TEXT    NOT NULL,
+            amount    REAL   NOT NULL,
+            PRIMARY KEY (ticker_id, date)
+        );
+
+        CREATE TABLE IF NOT EXISTS splits (
+            ticker_id INTEGER NOT NULL REFERENCES tickers(id),
+            date      TEXT    NOT NULL,
+            ratio     REAL   NOT NULL,
+            PRIMARY KEY (ticker_id, date)
+        );
+
+        CREATE TABLE IF NOT EXISTS fundamentals (
+            ticker_id    INTEGER PRIMARY KEY REFERENCES tickers(id),
+            market_cap   REAL,
+            sector       TEXT,
+            industry     TEXT,
+            pe_ratio     REAL,
+            last_updated TEXT NOT NULL
+        );
     """)
 
     # Migrate from daily_prices to prices if the old table exists.

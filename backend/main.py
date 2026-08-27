@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from database import get_connection, init_db, is_data_stale, is_intraday_stale
 from backtest import run_backtest, extract_signals
-from fetch import fetch, fetch_all_timeframes, ensure_fresh, TIMEFRAME_CONFIG
+from fetch import fetch, fetch_all_timeframes, fetch_extras, ensure_fresh, TIMEFRAME_CONFIG
 from indicators import sma, rsi
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,11 @@ def _startup_staleness_check() -> None:
             logger.info("%s catch-up fetch complete", tf)
         else:
             logger.info("%s data is current (latest: %s) — skipping fetch", tf, intra_latest)
+
+    # Fetch dividends, splits, and fundamentals (fundamentals only if stale > 7 days).
+    logger.info("Checking dividends, splits, and fundamentals")
+    fetch_extras()
+    logger.info("Dividends/splits/fundamentals check complete")
 
 
 @asynccontextmanager
@@ -299,3 +304,82 @@ def signals_sma_crossover(ticker: str = Query("SPY")):
         return []
 
     return extract_signals(data, sma_window)
+
+
+@app.get("/dividends/{ticker}")
+def get_dividends(ticker: str):
+    symbol = ticker.upper()
+    conn = get_connection()
+
+    row = conn.execute(
+        "SELECT id FROM tickers WHERE symbol = ?", (symbol,)
+    ).fetchone()
+
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail=f"Ticker {symbol} not found")
+
+    rows = conn.execute(
+        """
+        SELECT date, amount FROM dividends
+        WHERE ticker_id = ?
+        ORDER BY date ASC
+        """,
+        (row["id"],),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/splits/{ticker}")
+def get_splits(ticker: str):
+    symbol = ticker.upper()
+    conn = get_connection()
+
+    row = conn.execute(
+        "SELECT id FROM tickers WHERE symbol = ?", (symbol,)
+    ).fetchone()
+
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail=f"Ticker {symbol} not found")
+
+    rows = conn.execute(
+        """
+        SELECT date, ratio FROM splits
+        WHERE ticker_id = ?
+        ORDER BY date ASC
+        """,
+        (row["id"],),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/fundamentals/{ticker}")
+def get_fundamentals(ticker: str):
+    symbol = ticker.upper()
+    conn = get_connection()
+
+    row = conn.execute(
+        "SELECT id FROM tickers WHERE symbol = ?", (symbol,)
+    ).fetchone()
+
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail=f"Ticker {symbol} not found")
+
+    fund = conn.execute(
+        """
+        SELECT market_cap, sector, industry, pe_ratio, last_updated
+        FROM fundamentals
+        WHERE ticker_id = ?
+        """,
+        (row["id"],),
+    ).fetchone()
+    conn.close()
+
+    if fund is None:
+        return {}
+
+    return dict(fund)

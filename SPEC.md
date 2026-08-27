@@ -1346,3 +1346,132 @@ rows. Running the backend regularly over weeks/months results in
 intraday history deeper than yfinance's own retention window would
 provide on a single fresh query. 1-minute timeframe, new data fields,
 and TA-Lib integration remain separate, deferred milestones.
+
+# Milestone 14 Spec: Dividends, Splits, and Fundamentals Data
+
+## Context
+Milestones 1-13 are complete: multi-ticker dashboard with configurable
+indicators, a scheduled + startup-checked fetch pipeline that now
+accumulates intraday history (Milestone 13), and a backtesting engine
+with cost modeling. This milestone expands what data is stored beyond
+OHLCV price bars — adding dividends, stock splits, and a small set of
+basic fundamentals (market cap, sector, industry, P/E ratio) for each
+watchlist ticker. This is a data-layer milestone only: fetch and store,
+don't yet wire this data into charts, indicators, or the backtester.
+
+## Goal
+For each ticker in the watchlist, fetch and persist dividend history,
+split history, and a small snapshot of basic fundamentals from yfinance,
+refreshed on a sensible (much less frequent than price data) cadence,
+and exposed via simple read endpoints.
+
+## Explicitly out of scope for this milestone
+- Displaying dividends/splits/fundamentals anywhere in the frontend
+  (chart markers for dividends, a fundamentals panel, etc.) — this
+  milestone is fetch-and-store plus a raw API, not UI
+- Adjusting historical OHLCV prices for splits/dividends, or changing
+  any existing price-fetch behavior — this milestone adds new, separate
+  data alongside existing price data, it does not modify how prices are
+  fetched or stored
+- Using this data in the backtester (e.g. accounting for dividends in
+  returns) — a real future improvement, but separate from just having
+  the data available
+- A large or exhaustive fundamentals field set — deliberately limited to
+  a small, useful starting set (see below); more fields can be added
+  later once these are proven working
+- Historical fundamentals as a time series — fundamentals are stored as
+  a single current snapshot per ticker, not tracked over time, for this
+  milestone
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when dividends, splits, and basic fundamentals are
+correctly fetched, stored, and retrievable via API for every watchlist
+ticker.
+
+## Important note on fundamentals fetching
+yfinance's fundamentals data (via `Ticker.info`) is less reliable than
+its price-history data — it can be slower, occasionally incomplete for a
+given symbol, or shift in structure between yfinance versions. Treat
+fundamentals fetch failures as expected/recoverable (log and skip,
+don't crash), same general posture as the per-ticker error handling
+already used for price fetches since Milestone 6.
+
+## Design decisions (already made — don't re-litigate these)
+- **Fundamentals field set for this milestone**: market cap, sector,
+  industry, and trailing P/E ratio. Deliberately small — this is a
+  starting set, not the full breadth available from yfinance.
+- **New tables**: `dividends` (ticker_id, date, amount), `splits`
+  (ticker_id, date, ratio), and `fundamentals` (ticker_id, market_cap,
+  sector, industry, pe_ratio, last_updated) — fundamentals as a single
+  row per ticker (upserted/overwritten on refresh), not a history table.
+- **Fetch cadence**: much less frequent than price data, since these
+  change slowly. Dividends/splits: refresh on the existing daily
+  schedule (Milestone 6) — cheap to check in full each time since the
+  datasets are small, upsert as usual. Fundamentals: refresh only if the
+  stored snapshot is older than a longer threshold (e.g. 7 days), not on
+  every daily run, to reduce reliance on the less-stable `Ticker.info`
+  call.
+- **Reuse existing scheduling infrastructure**: piggyback on Milestone
+  6's scheduled job and Milestone 7's per-ticker error handling pattern,
+  rather than building a separate scheduling mechanism for this new
+  data.
+- **API shape**: simple read endpoints — `GET /dividends/{ticker}`,
+  `GET /splits/{ticker}`, `GET /fundamentals/{ticker}` — each returning
+  the stored data for that ticker as-is, no computation or joining with
+  price data yet.
+
+## Steps
+
+1. **New tables** (backend)
+   - Create `dividends`, `splits`, and `fundamentals` tables per the
+     schema above.
+
+2. **Fetch functions**
+   - Dividend/split fetch: pull full history via yfinance for a given
+     ticker, upsert into the respective tables (same upsert discipline
+     used for price data — don't duplicate rows on re-run).
+   - Fundamentals fetch: pull the four fields listed above via
+     `Ticker.info` (or equivalent), upsert the single snapshot row per
+     ticker. Wrap in error handling so a failure for one ticker (or a
+     missing field for a given symbol) doesn't stop others from
+     updating.
+
+3. **Wire into the scheduler**
+   - Extend the Milestone 6 scheduled job (and Milestone 7 startup
+     check, if it makes sense there too) to also run dividend/split
+     fetches every run, and fundamentals fetches only when the stored
+     snapshot is older than the configured threshold (default 7 days).
+
+4. **API endpoints**
+   - Add the three read endpoints listed above, returning stored data
+     for a given ticker as structured JSON. Return a clear empty/not-
+     found response if no data exists yet for a ticker rather than an
+     error.
+
+5. **Verify end to end**
+   - Run the fetch for all three watchlist tickers; confirm dividend and
+     split history lands correctly — spot-check SPY's dividend history
+     against a known public source to confirm dates/amounts are
+     sensible.
+   - Confirm fundamentals snapshot is populated with plausible values
+     (e.g. SPY's sector/industry classification, a reasonable market cap
+     figure) for each ticker.
+   - Re-run the fetch and confirm no duplicate rows are created in
+     `dividends`/`splits`, and that `fundamentals` correctly updates
+     (not duplicates) the single row per ticker.
+   - Confirm fundamentals do NOT re-fetch on every single scheduled run
+     — only when the snapshot exceeds the staleness threshold. Verify by
+     checking `last_updated` doesn't change on a run that happens before
+     the threshold is reached.
+   - Confirm a simulated fundamentals fetch failure (e.g. temporarily use
+     an invalid ticker) doesn't block dividend/split fetching or other
+     tickers' fundamentals from updating.
+
+## Definition of done
+Dividend history, split history, and a basic fundamentals snapshot
+(market cap, sector, industry, P/E) are correctly fetched and stored for
+every watchlist ticker, retrievable via three simple read endpoints.
+Dividends/splits refresh on the existing daily schedule; fundamentals
+refresh on a longer cadence to reduce reliance on a less stable data
+source. No UI, backtester integration, or price-adjustment changes were
+made — this data exists and is retrievable, nothing more.
