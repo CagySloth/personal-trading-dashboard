@@ -9,28 +9,41 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from database import get_connection, init_db, is_data_stale
+from database import get_connection, init_db, is_data_stale, is_intraday_stale
 from backtest import run_backtest, extract_signals
-from fetch import fetch, ensure_fresh, TIMEFRAME_CONFIG
+from fetch import fetch, fetch_all_timeframes, ensure_fresh, TIMEFRAME_CONFIG
 from indicators import sma, rsi
 
 logger = logging.getLogger(__name__)
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(fetch, "cron", hour=16, minute=30, timezone="US/Eastern", id="daily_fetch")
+scheduler.add_job(fetch_all_timeframes, "cron", hour=16, minute=30, timezone="US/Eastern", id="daily_fetch")
 
 
 def _startup_staleness_check() -> None:
+    # Check daily data staleness.
     stale, latest, expected = is_data_stale()
     if stale:
         logger.info(
-            "Data is stale (latest: %s, expected: %s) — running catch-up fetch",
+            "Daily data is stale (latest: %s, expected: %s) — running catch-up fetch",
             latest, expected,
         )
         fetch()
-        logger.info("Catch-up fetch complete")
+        logger.info("Daily catch-up fetch complete")
     else:
-        logger.info("Data is current (latest: %s) — skipping fetch", latest)
+        logger.info("Daily data is current (latest: %s) — skipping fetch", latest)
+
+    # Check intraday data staleness (1h, 5m).
+    for tf in ("1h", "5m"):
+        intraday_stale, intra_latest = is_intraday_stale(tf)
+        if intraday_stale:
+            logger.info(
+                "%s data is stale (latest: %s) — running catch-up fetch", tf, intra_latest,
+            )
+            fetch(tf)
+            logger.info("%s catch-up fetch complete", tf)
+        else:
+            logger.info("%s data is current (latest: %s) — skipping fetch", tf, intra_latest)
 
 
 @asynccontextmanager

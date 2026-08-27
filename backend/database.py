@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "market_data.db"
@@ -100,3 +100,39 @@ def is_data_stale() -> tuple[bool, str, str]:
 
     latest = row["latest"]
     return latest < str(expected), latest, str(expected)
+
+
+# How many hours before intraday data is considered stale for the startup check.
+_INTRADAY_STALE_HOURS = {
+    "1h": 24,   # stale if older than 24 hours
+    "5m": 24,   # stale if older than 24 hours
+}
+
+
+def is_intraday_stale(timeframe: str) -> tuple[bool, str]:
+    """Check if cached intraday data is stale.
+
+    Returns (is_stale, latest_cached_datetime).
+    """
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT MAX(datetime) AS latest FROM prices WHERE timeframe = ?",
+        (timeframe,),
+    ).fetchone()
+    conn.close()
+
+    if row["latest"] is None:
+        return True, "(empty)"
+
+    latest_str = row["latest"]
+    threshold_hours = _INTRADAY_STALE_HOURS.get(timeframe, 24)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=threshold_hours)
+
+    try:
+        latest_dt = datetime.strptime(latest_str, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        return latest_dt < cutoff, latest_str
+    except ValueError:
+        # If parsing fails, consider it stale.
+        return True, latest_str

@@ -121,6 +121,13 @@ def fetch(timeframe: str = "1d") -> None:
     conn.close()
 
 
+def fetch_all_timeframes() -> None:
+    """Fetch data for all tickers across all supported timeframes (1d, 1h, 5m)."""
+    for tf in TIMEFRAME_CONFIG:
+        logger.info("Fetching all tickers for timeframe %s", tf)
+        fetch(tf)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     fetch()

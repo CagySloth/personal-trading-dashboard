@@ -1223,3 +1223,126 @@ The cost-adjusted numbers are verified correct by hand against a
 manually recomputed trade. Frictionless results are unchanged from
 Milestones 9 and 11. Slippage modeling, cost configurability UI, other
 strategies, and other tickers remain deferred to future milestones.
+
+# Milestone 13 Spec: Intraday Data Accumulation
+
+## Context
+Milestone 8 added timeframe selection (1 day / 1 hour / 5 minute), with
+intraday data fetched **on-demand only** — pulled when a user requests
+that timeframe, not on any schedule. This means intraday history is
+bounded by whatever yfinance's own retention window currently holds (60
+days for 1h/5m), and nothing is done to preserve data before it ages out
+of that window.
+
+This milestone changes that: intraday timeframes are now included in the
+existing scheduled fetch (Milestone 6) and startup staleness check
+(Milestone 7), so bars are pulled regularly and accumulated in SQLite
+over time — building a longer history than any single yfinance query
+could ever return, since old rows are preserved even after yfinance's own
+window slides past them.
+
+## Important constraint — read before implementing
+This is accumulation, not backfill. Historical intraday bars that have
+already aged out of yfinance's retention window **cannot be recovered** —
+there is no way to fetch 5-minute bars from 4 months ago if yfinance no
+longer has them. This milestone only ensures that, going forward, nothing
+new gets lost. If the backend hasn't run in longer than a timeframe's
+retention window (e.g. hasn't run in 70+ days, longer than 5m's 60-day
+window), there will be a permanent, unrecoverable gap for that period —
+that's an accepted limitation, not a bug to fix. Handle it by logging
+clearly, not by erroring or crashing.
+
+## Goal
+The existing scheduled job and startup catch-up now also fetch and
+upsert 1-hour and 5-minute bars (in addition to the existing daily
+fetch) for all watchlist tickers, using the same fetch/cache logic
+already built in Milestone 8 — with the critical guarantee that
+previously-accumulated rows are never deleted or overwritten by a
+fetch that no longer includes them in its returned window.
+
+## Explicitly out of scope for this milestone
+- 1-minute timeframe — still deferred, same as Milestone 8's original
+  scope; its 7-day window makes accumulation valuable but this milestone
+  proves the mechanism on the wider 1h/5m windows first
+- Any change to fetch cadence beyond the existing daily schedule — don't
+  add sub-daily/hourly scheduling triggers; once-daily is enough to keep
+  intraday accumulation gap-free given the 60-day retention windows
+  involved (a daily fetch overlaps the prior window by a wide margin)
+- New data fields (dividends, splits, fundamentals) — separate milestone
+- TA-Lib or any new indicator library — separate milestone
+- Any new tickers beyond the existing watchlist
+- A UI to show accumulated history depth/growth — backend and logging
+  only for this milestone; a "how much history do I have" view can come
+  later if useful
+
+Do not add any of the above even if it seems easy or natural.
+
+## Design decisions (already made — don't re-litigate these)
+- **Additive fetch, never destructive**: the fetch/upsert logic must add
+  new rows and update genuinely changed ones (e.g. a very recent bar that
+  was previously partial), but must never delete or bulk-replace existing
+  cached rows for a ticker+timeframe just because the latest yfinance
+  response no longer includes them. This is the entire mechanism accumulation
+  depends on — verify explicitly that Milestone 8's existing fetch
+  function behaves this way, and fix it if it currently does a
+  replace-all rather than a true upsert.
+- **Same cadence as the existing daily job**: intraday fetches piggyback
+  on the Milestone 6 scheduled run and Milestone 7 startup check, rather
+  than introducing a separate schedule. Simpler to reason about, and
+  sufficient given the retention windows involved.
+- **Reuse Milestone 8's fetch logic**: no new fetch code — the scheduler
+  and startup check now call the existing per-timeframe fetch function
+  for 1h and 5m in addition to 1d, for every ticker in the watchlist.
+- **Staleness check extended, not replaced**: Milestone 7's staleness
+  check gets extended to also check 1h/5m freshness per ticker, using a
+  reasonable freshness threshold for each (e.g. 5m data stale if older
+  than a few hours, vs. 1d's "last completed trading day" threshold) —
+  not held to the same staleness definition as daily data.
+
+## Steps
+
+1. **Verify/fix upsert behavior** (backend)
+   - Audit Milestone 8's existing intraday fetch-and-cache function.
+     Confirm it upserts (insert new rows, update existing ones by
+     matching key) rather than deleting/replacing all rows for that
+     ticker+timeframe on each fetch. Fix this first if it doesn't already
+     work this way — everything else in this milestone depends on it.
+
+2. **Extend the scheduled job**
+   - Update the Milestone 6 scheduled job to loop over 1h and 5m (in
+     addition to the existing 1d fetch) for every watchlist ticker,
+     upserting into the same schema from Milestone 8.
+   - Wrap each ticker/timeframe combination in the same per-item error
+     handling from Milestone 6, so one failure doesn't block the rest.
+
+3. **Extend the startup staleness check**
+   - Update Milestone 7's check to also evaluate 1h/5m freshness per
+     ticker, using a sensible freshness threshold per timeframe (not the
+     daily "last trading day" logic — intraday data goes stale faster).
+   - Trigger a catch-up fetch for any stale ticker/timeframe combination
+     on startup, same non-blocking behavior as Milestone 7.
+
+4. **Verify end to end**
+   - Run the scheduled/startup fetch and confirm 1h and 5m rows are
+     inserted for all tickers, with no duplicates on repeated runs.
+   - Confirm previously-cached intraday rows are still present and
+     unchanged after a fetch whose current yfinance response window no
+     longer includes them (e.g. check row count and oldest cached
+     timestamp before and after a fetch — the oldest row should not
+     disappear or shift forward).
+   - Simulate a startup after a gap (e.g. temporarily adjust the last-
+     fetched timestamp in the database, or just observe behavior after a
+     real gap) and confirm the catch-up fetch pulls what's still
+     available within the retention window, and logs clearly (without
+     erroring) if part of the gap is unrecoverable.
+   - Confirm existing 1-day behavior, the chart, indicators, and
+     backtest features are all unaffected by this change.
+
+## Definition of done
+The scheduled job and startup check now accumulate 1-hour and 5-minute
+history for all watchlist tickers over time, in addition to daily data,
+using upsert logic verified to never destroy previously-accumulated
+rows. Running the backend regularly over weeks/months results in
+intraday history deeper than yfinance's own retention window would
+provide on a single fresh query. 1-minute timeframe, new data fields,
+and TA-Lib integration remain separate, deferred milestones.
