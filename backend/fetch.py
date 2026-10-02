@@ -41,6 +41,13 @@ def fetch_ticker(conn, ticker_id: int, symbol: str, timeframe: str = "1d") -> in
         logger.warning("No data returned for %s (%s)", symbol, timeframe)
         return 0
 
+    # Drop rows where any OHLCV field is NaN (partial/missing data from yfinance).
+    df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+
+    if df.empty:
+        logger.warning("All rows had NaN values for %s (%s) — skipping", symbol, timeframe)
+        return 0
+
     rows = []
     for dt, r in df.iterrows():
         rows.append((
