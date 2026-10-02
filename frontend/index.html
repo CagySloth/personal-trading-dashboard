@@ -134,6 +134,23 @@
       <label>Oversold Threshold</label>
       <input type="number" id="set-rsi-oversold" min="1" max="99">
 
+      <hr>
+
+      <label>MACD Fast Period</label>
+      <input type="number" id="set-macd-fast" min="1">
+
+      <label>MACD Slow Period</label>
+      <input type="number" id="set-macd-slow" min="1">
+
+      <label>MACD Signal Period</label>
+      <input type="number" id="set-macd-signal" min="1">
+
+      <label>MACD Line Color</label>
+      <input type="color" id="set-macd-line-color">
+
+      <label>Signal Line Color</label>
+      <input type="color" id="set-macd-signal-color">
+
       <div id="settings-error"></div>
       <div id="settings-actions">
         <button id="settings-cancel">Cancel</button>
@@ -322,6 +339,8 @@
       smaSeries.applyOptions({ color: s.sma_color });
       rsiSeries.applyOptions({ color: s.rsi_color });
       setThresholdLines(s.rsi_overbought, s.rsi_oversold);
+      macdLineSeries.applyOptions({ color: s.macd_line_color });
+      macdSignalSeries.applyOptions({ color: s.macd_signal_color });
     }
 
     // --- Settings panel ---
@@ -337,6 +356,11 @@
           document.getElementById('set-rsi-color').value = s.rsi_color;
           document.getElementById('set-rsi-overbought').value = s.rsi_overbought;
           document.getElementById('set-rsi-oversold').value = s.rsi_oversold;
+          document.getElementById('set-macd-fast').value = s.macd_fast;
+          document.getElementById('set-macd-slow').value = s.macd_slow;
+          document.getElementById('set-macd-signal').value = s.macd_signal;
+          document.getElementById('set-macd-line-color').value = s.macd_line_color;
+          document.getElementById('set-macd-signal-color').value = s.macd_signal_color;
           settingsOverlay.style.display = 'block';
         });
     }
@@ -354,6 +378,11 @@
         rsi_color: document.getElementById('set-rsi-color').value,
         rsi_overbought: parseFloat(document.getElementById('set-rsi-overbought').value),
         rsi_oversold: parseFloat(document.getElementById('set-rsi-oversold').value),
+        macd_fast: parseInt(document.getElementById('set-macd-fast').value),
+        macd_slow: parseInt(document.getElementById('set-macd-slow').value),
+        macd_signal: parseInt(document.getElementById('set-macd-signal').value),
+        macd_line_color: document.getElementById('set-macd-line-color').value,
+        macd_signal_color: document.getElementById('set-macd-signal-color').value,
       };
 
       fetch(`${API}/settings`, {

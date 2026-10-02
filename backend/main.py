@@ -81,16 +81,21 @@ class SettingsUpdate(BaseModel):
     rsi_overbought: Optional[float] = None
     rsi_oversold: Optional[float] = None
     rsi_color: Optional[str] = None
+    macd_fast: Optional[int] = None
+    macd_slow: Optional[int] = None
+    macd_signal: Optional[int] = None
+    macd_line_color: Optional[str] = None
+    macd_signal_color: Optional[str] = None
 
 
 def _validate_settings(body: SettingsUpdate, current: dict) -> None:
     """Validate settings fields, raising HTTPException on invalid input."""
-    for field in ("sma_window", "rsi_window"):
+    for field in ("sma_window", "rsi_window", "macd_fast", "macd_slow", "macd_signal"):
         val = getattr(body, field)
         if val is not None and val < 1:
             raise HTTPException(status_code=422, detail=f"{field} must be >= 1")
 
-    for field in ("sma_color", "rsi_color"):
+    for field in ("sma_color", "rsi_color", "macd_line_color", "macd_signal_color"):
         val = getattr(body, field)
         if val is not None and not HEX_COLOR_RE.match(val):
             raise HTTPException(status_code=422, detail="Color must be a hex string like #RRGGBB")
@@ -102,6 +107,11 @@ def _validate_settings(body: SettingsUpdate, current: dict) -> None:
         raise HTTPException(status_code=422, detail="RSI thresholds must be between 0 and 100 (exclusive)")
     if oversold >= overbought:
         raise HTTPException(status_code=422, detail="RSI oversold must be less than overbought")
+
+    macd_fast = body.macd_fast if body.macd_fast is not None else current["macd_fast"]
+    macd_slow = body.macd_slow if body.macd_slow is not None else current["macd_slow"]
+    if macd_fast >= macd_slow:
+        raise HTTPException(status_code=422, detail="MACD fast period must be less than slow period")
 
 
 @app.get("/settings")
@@ -196,7 +206,7 @@ def get_prices(
 
     # Read stored settings if any indicator is requested.
     settings = None
-    if include_sma or include_rsi:
+    if include_sma or include_rsi or include_macd:
         settings = conn.execute(
             "SELECT * FROM indicator_settings"
         ).fetchone()
@@ -218,7 +228,12 @@ def get_prices(
             row_dict["rsi"] = rsi_val
 
     if include_macd:
-        macd_line, signal_line, hist = macd(closes)
+        macd_line, signal_line, hist = macd(
+            closes,
+            fast=settings["macd_fast"],
+            slow=settings["macd_slow"],
+            signal=settings["macd_signal"],
+        )
         for row_dict, m, s, h in zip(data, macd_line, signal_line, hist):
             row_dict["macd"] = m
             row_dict["macd_signal"] = s

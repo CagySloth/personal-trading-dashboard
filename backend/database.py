@@ -40,7 +40,12 @@ def init_db() -> None:
             rsi_window      INTEGER NOT NULL DEFAULT 14,
             rsi_overbought  REAL    NOT NULL DEFAULT 70,
             rsi_oversold    REAL    NOT NULL DEFAULT 30,
-            rsi_color       TEXT    NOT NULL DEFAULT '#E91E63'
+            rsi_color       TEXT    NOT NULL DEFAULT '#E91E63',
+            macd_fast       INTEGER NOT NULL DEFAULT 12,
+            macd_slow       INTEGER NOT NULL DEFAULT 26,
+            macd_signal     INTEGER NOT NULL DEFAULT 9,
+            macd_line_color TEXT    NOT NULL DEFAULT '#2962FF',
+            macd_signal_color TEXT  NOT NULL DEFAULT '#FF6D00'
         );
 
         INSERT OR IGNORE INTO indicator_settings (id) VALUES (1);
@@ -82,6 +87,20 @@ def init_db() -> None:
         """)
         conn.execute("DROP TABLE daily_prices")
         conn.commit()
+
+    # Migrate indicator_settings: add MACD columns if they don't exist yet.
+    for col, definition in (
+        ("macd_fast", "INTEGER NOT NULL DEFAULT 12"),
+        ("macd_slow", "INTEGER NOT NULL DEFAULT 26"),
+        ("macd_signal", "INTEGER NOT NULL DEFAULT 9"),
+        ("macd_line_color", "TEXT NOT NULL DEFAULT '#2962FF'"),
+        ("macd_signal_color", "TEXT NOT NULL DEFAULT '#FF6D00'"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE indicator_settings ADD COLUMN {col} {definition}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists.
+    conn.commit()
 
     # Seed starter tickers.
     for symbol in ("SPY", "AAPL", "QQQ"):

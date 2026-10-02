@@ -1588,3 +1588,108 @@ via TA-Lib, cross-checked against a reliable reference. TA-Lib is
 confirmed to install cleanly in this project's environment. SMA and RSI
 remain hand-implemented and unchanged. MACD configuration UI and
 backtester integration remain deferred to future milestones.
+
+# Milestone 16 Spec: Extend Configuration Layer to MACD
+
+## Context
+Milestones 1-15 are complete, including the Milestone 5 configuration
+layer (currently covering SMA's window/color and RSI's window/thresholds/
+color, persisted in SQLite) and Milestone 15's addition of MACD via
+TA-Lib (currently using hardcoded-but-parameterized defaults: 12/26/9
+periods, no stored settings, no UI). This milestone closes that gap by
+extending the existing configuration layer to also cover MACD, so all
+three indicators are configurable through the same mechanism rather than
+two out of three.
+
+## Goal
+MACD's parameters (fast period, slow period, signal period) and line
+colors (MACD line, signal line) become configurable through the existing
+settings table and UI, persisted the same way SMA and RSI already are.
+
+## Explicitly out of scope for this milestone
+- Any new indicator — this milestone only extends configuration coverage
+  to MACD, it doesn't add Bollinger Bands or anything else
+- Per-ticker configuration — settings remain global, consistent with the
+  Milestone 5 scope decision
+- Histogram-specific color configuration — keep this pass to MACD line
+  and signal line colors only, matching the "one new surface, not
+  maximal scope" discipline used elsewhere; histogram color can be added
+  later if wanted
+- Saved presets or multiple configurations — still one active global
+  config, same as Milestone 5
+- Any change to SMA or RSI's existing configuration — this milestone is
+  purely additive for MACD, don't touch their stored settings, API
+  handling, or UI
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when MACD's parameters and colors are configurable,
+persisted, and validated the same way SMA/RSI's already are.
+
+## Design decisions (already made — don't re-litigate these)
+- **Extend, don't replace**: add new columns to the existing
+  `indicator_settings` table (e.g. `macd_fast`, `macd_slow`,
+  `macd_signal`, `macd_line_color`, `macd_signal_color`) rather than
+  creating a separate table — keeps all indicator settings in one place,
+  consistent with how SMA and RSI are already stored.
+- **Defaults on first run**: if the settings row predates this milestone
+  (i.e. was created before MACD columns existed) or no row exists yet,
+  fall back to MACD's current hardcoded defaults (12/26/9, reasonable
+  default colors) — don't error, don't lose existing SMA/RSI settings
+  already stored in that row.
+- **Validation**: fast period < slow period is a real constraint worth
+  enforcing server-side (a MACD with fast >= slow is not meaningful) —
+  same validation discipline already used for RSI's oversold < overbought
+  check in Milestone 5.
+- **API**: extend the existing `GET /settings` / `PUT /settings`
+  endpoints to include the new MACD fields alongside the existing SMA/RSI
+  fields — one settings object, not a separate endpoint for MACD.
+- **Wiring**: the existing MACD calculation/endpoint (Milestone 15) reads
+  its fast/slow/signal periods from stored settings instead of hardcoded
+  constants, same pattern already used for SMA's window and RSI's
+  window/thresholds.
+
+## Steps
+
+1. **Extend the settings table** (backend)
+   - Add `macd_fast`, `macd_slow`, `macd_signal`, `macd_line_color`,
+     `macd_signal_color` columns to `indicator_settings`.
+   - Handle the migration/default-seeding case so existing rows (created
+     before this milestone) gain sensible MACD defaults rather than
+     breaking or returning nulls.
+
+2. **Extend settings API validation and handling**
+   - Update `GET /settings` to include the new MACD fields.
+   - Update `PUT /settings` to accept and validate them — periods > 0,
+     fast < slow — rejecting invalid combinations with a clear error,
+     consistent with existing RSI validation.
+
+3. **Wire MACD calculation to stored settings**
+   - Update the Milestone 15 MACD endpoint/calculation to pull
+     fast/slow/signal periods from `indicator_settings` rather than
+     hardcoded defaults, mirroring exactly how SMA/RSI already do this.
+
+4. **Extend the settings UI**
+   - Add MACD's fields (three period number inputs, two color pickers) to
+     the existing settings panel alongside SMA and RSI's controls.
+   - Saving updates the chart's MACD panel without a page reload, same
+     behavior as the existing SMA/RSI settings.
+
+5. **Verify end to end**
+   - Change MACD's periods and colors via the settings UI; confirm the
+     MACD panel updates to reflect both.
+   - Restart the backend and reload the frontend; confirm MACD settings
+     persisted, alongside confirming SMA/RSI settings are still intact
+     and unaffected.
+   - Submit an invalid MACD combination (e.g. fast >= slow) and confirm
+     it's rejected with a clear error, not silently accepted.
+   - Confirm settings apply consistently across all watchlist tickers,
+     same as SMA/RSI (global, not per-ticker).
+
+## Definition of done
+MACD's fast/slow/signal periods and line/signal colors are configurable
+through the same settings panel and API used for SMA and RSI, persisted
+in the same `indicator_settings` table, validated with the same rigor
+(fast < slow enforced), and unaffected by restarts. SMA and RSI's
+existing configuration is untouched. All three indicators are now
+configurable through one consistent mechanism — no indicator is left on
+hardcoded defaults with no way to change them through the UI.
