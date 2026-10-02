@@ -16,6 +16,24 @@
     #content { max-width: 1100px; margin: 0 auto; padding: 24px; }
     h1 { font-size: 20px; margin: 0 0 20px; }
 
+    /* Cost settings */
+    #cost-settings {
+      display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+      margin-bottom: 24px; padding: 16px;
+      border: 1px solid #ddd; border-radius: 8px; background: #fafafa;
+    }
+    #cost-settings label {
+      font-size: 13px; color: #555; display: block; margin-bottom: 4px;
+    }
+    #cost-settings input[type="number"] {
+      width: 100px; padding: 4px 6px; font-size: 14px;
+    }
+    #cost-settings .field-note {
+      font-size: 11px; color: #888; margin-top: 2px;
+    }
+    #cost-apply { padding: 6px 16px; font-size: 14px; cursor: pointer; }
+    #cost-error { color: #d32f2f; font-size: 13px; width: 100%; display: none; }
+
     /* Metrics cards */
     #metrics { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
     .metric-card {
@@ -63,6 +81,24 @@
     <div id="results" style="display:none">
       <h1>SMA Crossover — SPY (Daily)</h1>
 
+      <div id="cost-settings">
+        <div>
+          <label>Commission (%)</label>
+          <input type="number" id="cost-commission" min="0" step="0.01">
+        </div>
+        <div>
+          <label>Fixed Fee ($)</label>
+          <input type="number" id="cost-fixed-fee" min="0" step="0.01">
+        </div>
+        <div>
+          <label>Slippage (bps)</label>
+          <input type="number" id="cost-slippage" min="0" step="0.1">
+          <div class="field-note">Approximate price impact per trade</div>
+        </div>
+        <button id="cost-apply">Apply</button>
+        <div id="cost-error"></div>
+      </div>
+
       <div id="metrics">
         <div class="metric-card">
           <h3>Frictionless</h3>
@@ -72,7 +108,7 @@
           <div class="metric-row"><span class="label">Win Rate</span><span class="value" id="fl-winrate"></span></div>
         </div>
         <div class="metric-card">
-          <h3>Cost-Adjusted (0.1%)</h3>
+          <h3 id="ca-heading">Cost-Adjusted</h3>
           <div class="metric-row"><span class="label">Total Return</span><span class="value" id="ca-return"></span></div>
           <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="ca-drawdown"></span></div>
           <div class="metric-row"><span class="label">Trades</span><span class="value" id="ca-trades"></span></div>
@@ -117,79 +153,144 @@
   <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   <script>
     const API = 'http://127.0.0.1:8000';
+    const costError = document.getElementById('cost-error');
 
-    fetch(`${API}/backtest/sma-crossover?ticker=SPY`)
+    let chart = null;
+    let flSeries = null;
+    let caSeries = null;
+
+    function updateCostHeading() {
+      const comm = parseFloat(document.getElementById('cost-commission').value) || 0;
+      const fee = parseFloat(document.getElementById('cost-fixed-fee').value) || 0;
+      const slip = parseFloat(document.getElementById('cost-slippage').value) || 0;
+
+      const parts = [];
+      if (comm > 0) parts.push(comm + '%');
+      if (fee > 0) parts.push('$' + fee + ' fee');
+      if (slip > 0) parts.push(slip + ' bps');
+
+      const heading = document.getElementById('ca-heading');
+      heading.textContent = parts.length
+        ? 'Cost-Adjusted (' + parts.join(' + ') + ')'
+        : 'Cost-Adjusted';
+    }
+
+    function loadBacktest() {
+      fetch(`${API}/backtest/sma-crossover?ticker=SPY`)
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('results').style.display = 'block';
+
+          const fl = data.frictionless.strategy;
+          const ca = data.cost_adjusted.strategy;
+          const bh = data.buy_and_hold;
+
+          // --- Metrics ---
+          document.getElementById('fl-return').textContent = fl.total_return_pct.toFixed(2) + '%';
+          document.getElementById('fl-drawdown').textContent = fl.max_drawdown_pct.toFixed(2) + '%';
+          document.getElementById('fl-trades').textContent = fl.num_trades;
+          document.getElementById('fl-winrate').textContent = fl.win_rate_pct.toFixed(2) + '%';
+
+          document.getElementById('ca-return').textContent = ca.total_return_pct.toFixed(2) + '%';
+          document.getElementById('ca-drawdown').textContent = ca.max_drawdown_pct.toFixed(2) + '%';
+          document.getElementById('ca-trades').textContent = ca.num_trades;
+          document.getElementById('ca-winrate').textContent = ca.win_rate_pct.toFixed(2) + '%';
+
+          document.getElementById('bh-return').textContent = bh.total_return_pct.toFixed(2) + '%';
+          document.getElementById('bh-drawdown').textContent = bh.max_drawdown_pct.toFixed(2) + '%';
+          document.getElementById('bh-period').textContent = bh.start_date + ' to ' + bh.end_date;
+
+          updateCostHeading();
+
+          // --- Equity curves (both on one chart) ---
+          const chartEl = document.getElementById('equity-chart');
+
+          if (!chart) {
+            chart = LightweightCharts.createChart(chartEl, {
+              width: chartEl.clientWidth,
+              height: 300,
+            });
+            flSeries = chart.addSeries(LightweightCharts.LineSeries, {
+              color: '#2962FF',
+              lineWidth: 2,
+            });
+            caSeries = chart.addSeries(LightweightCharts.LineSeries, {
+              color: '#FF6D00',
+              lineWidth: 2,
+            });
+            window.addEventListener('resize', () => {
+              chart.resize(chartEl.clientWidth, 300);
+            });
+          }
+
+          flSeries.setData(
+            data.frictionless.equity.map(e => ({ time: e.date, value: e.value }))
+          );
+          caSeries.setData(
+            data.cost_adjusted.equity.map(e => ({ time: e.date, value: e.value }))
+          );
+          chart.timeScale().fitContent();
+
+          // --- Trade log (same trades for both variants) ---
+          const trades = data.frictionless.trades;
+          const tbody = document.getElementById('trade-body');
+          tbody.innerHTML = '';
+          document.getElementById('trade-count').textContent = trades.length + ' trades';
+
+          trades.forEach((t, i) => {
+            const tr = document.createElement('tr');
+            const retClass = t.return_pct >= 0 ? 'positive' : 'negative';
+            const retSign = t.return_pct >= 0 ? '+' : '';
+            tr.innerHTML =
+              `<td>${i + 1}</td>` +
+              `<td>${t.entry_date}</td>` +
+              `<td>${t.entry_price.toFixed(2)}</td>` +
+              `<td>${t.exit_date}</td>` +
+              `<td>${t.exit_price.toFixed(2)}</td>` +
+              `<td class="${retClass}">${retSign}${t.return_pct.toFixed(2)}%</td>`;
+            tbody.appendChild(tr);
+          });
+        });
+    }
+
+    function saveCostSettings() {
+      costError.style.display = 'none';
+      const body = {
+        commission_pct: parseFloat(document.getElementById('cost-commission').value) / 100,
+        fixed_fee: parseFloat(document.getElementById('cost-fixed-fee').value),
+        slippage_bps: parseFloat(document.getElementById('cost-slippage').value),
+      };
+
+      fetch(`${API}/backtest/cost-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+        .then(r => {
+          if (!r.ok) return r.json().then(err => { throw err; });
+          return r.json();
+        })
+        .then(() => {
+          loadBacktest();
+        })
+        .catch(err => {
+          const msg = err.detail || JSON.stringify(err);
+          costError.textContent = typeof msg === 'string' ? msg : msg.map(e => e.msg).join('; ');
+          costError.style.display = 'block';
+        });
+    }
+
+    document.getElementById('cost-apply').addEventListener('click', saveCostSettings);
+
+    // --- Init: load cost settings, then load backtest ---
+    fetch(`${API}/backtest/cost-settings`)
       .then(r => r.json())
-      .then(data => {
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('results').style.display = 'block';
-
-        const fl = data.frictionless.strategy;
-        const ca = data.cost_adjusted.strategy;
-        const bh = data.buy_and_hold;
-
-        // --- Metrics ---
-        document.getElementById('fl-return').textContent = fl.total_return_pct.toFixed(2) + '%';
-        document.getElementById('fl-drawdown').textContent = fl.max_drawdown_pct.toFixed(2) + '%';
-        document.getElementById('fl-trades').textContent = fl.num_trades;
-        document.getElementById('fl-winrate').textContent = fl.win_rate_pct.toFixed(2) + '%';
-
-        document.getElementById('ca-return').textContent = ca.total_return_pct.toFixed(2) + '%';
-        document.getElementById('ca-drawdown').textContent = ca.max_drawdown_pct.toFixed(2) + '%';
-        document.getElementById('ca-trades').textContent = ca.num_trades;
-        document.getElementById('ca-winrate').textContent = ca.win_rate_pct.toFixed(2) + '%';
-
-        document.getElementById('bh-return').textContent = bh.total_return_pct.toFixed(2) + '%';
-        document.getElementById('bh-drawdown').textContent = bh.max_drawdown_pct.toFixed(2) + '%';
-        document.getElementById('bh-period').textContent = bh.start_date + ' to ' + bh.end_date;
-
-        // --- Equity curves (both on one chart) ---
-        const chartEl = document.getElementById('equity-chart');
-        const chart = LightweightCharts.createChart(chartEl, {
-          width: chartEl.clientWidth,
-          height: 300,
-        });
-
-        const flSeries = chart.addSeries(LightweightCharts.LineSeries, {
-          color: '#2962FF',
-          lineWidth: 2,
-        });
-        flSeries.setData(
-          data.frictionless.equity.map(e => ({ time: e.date, value: e.value }))
-        );
-
-        const caSeries = chart.addSeries(LightweightCharts.LineSeries, {
-          color: '#FF6D00',
-          lineWidth: 2,
-        });
-        caSeries.setData(
-          data.cost_adjusted.equity.map(e => ({ time: e.date, value: e.value }))
-        );
-
-        chart.timeScale().fitContent();
-
-        window.addEventListener('resize', () => {
-          chart.resize(chartEl.clientWidth, 300);
-        });
-
-        // --- Trade log (same trades for both variants) ---
-        const trades = data.frictionless.trades;
-        const tbody = document.getElementById('trade-body');
-        document.getElementById('trade-count').textContent = trades.length + ' trades';
-
-        trades.forEach((t, i) => {
-          const tr = document.createElement('tr');
-          const retClass = t.return_pct >= 0 ? 'positive' : 'negative';
-          const retSign = t.return_pct >= 0 ? '+' : '';
-          tr.innerHTML =
-            `<td>${i + 1}</td>` +
-            `<td>${t.entry_date}</td>` +
-            `<td>${t.entry_price.toFixed(2)}</td>` +
-            `<td>${t.exit_date}</td>` +
-            `<td>${t.exit_price.toFixed(2)}</td>` +
-            `<td class="${retClass}">${retSign}${t.return_pct.toFixed(2)}%</td>`;
-          tbody.appendChild(tr);
-        });
+      .then(s => {
+        document.getElementById('cost-commission').value = (s.commission_pct * 100);
+        document.getElementById('cost-fixed-fee').value = s.fixed_fee;
+        document.getElementById('cost-slippage').value = s.slippage_bps;
+        loadBacktest();
       });
   </script>
 </body>

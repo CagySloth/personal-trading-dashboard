@@ -72,6 +72,15 @@ def init_db() -> None:
             pe_ratio     REAL,
             last_updated TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS backtest_cost_settings (
+            id              INTEGER PRIMARY KEY CHECK (id = 1),
+            commission_pct  REAL NOT NULL DEFAULT 0.001,
+            fixed_fee       REAL NOT NULL DEFAULT 0,
+            slippage_bps    REAL NOT NULL DEFAULT 0
+        );
+
+        INSERT OR IGNORE INTO backtest_cost_settings (id) VALUES (1);
     """)
 
     # Migrate from daily_prices to prices if the old table exists.

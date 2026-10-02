@@ -1693,3 +1693,132 @@ in the same `indicator_settings` table, validated with the same rigor
 existing configuration is untouched. All three indicators are now
 configurable through one consistent mechanism — no indicator is left on
 hardcoded defaults with no way to change them through the UI.
+
+# Milestone 17 Spec: Configurable Trading Cost Model
+
+## Context
+Milestone 12 added a fixed, hardcoded cost model (0.1% commission on both
+entry and exit) to the backtesting engine, showing frictionless and
+cost-adjusted results side by side on the backtest page (Milestone 11).
+The cost rate was deliberately left unconfigurable at the time — a
+parameter with a sensible default, no UI. This milestone makes the cost
+model user-configurable, and expands it from a single percentage to
+three real cost components: percentage commission, a fixed fee per
+trade, and a slippage approximation. Configuration lives on the backtest
+page itself, not the indicator settings panel, since cost assumptions
+are backtest-specific rather than chart/indicator-specific — preserving
+the product separation between the chart view and the backtest page
+established in Milestone 10/11.
+
+## Goal
+The backtest page gains cost-model controls (percentage commission,
+fixed fee per trade, slippage in basis points), persisted in SQLite, and
+the cost-adjusted backtest result reflects whatever values the user sets
+— replacing the single hardcoded 0.1% rate from Milestone 12.
+
+## Explicitly out of scope for this milestone
+- Saved/named cost presets (e.g. "Discount broker" vs. "Retail broker")
+  or multiple simultaneous cost profiles — one active global cost
+  configuration, consistent with how indicator settings (Milestone 5)
+  deferred presets too
+- Per-ticker or per-strategy cost configuration — global only, same
+  scope discipline as indicator settings
+- Modeling real order-book slippage or variable slippage by trade size —
+  slippage here is a simple, clearly-labeled basis-point approximation
+  applied uniformly to every entry/exit, not a realistic fill simulation
+- Different cost treatment for buy vs. sell — symmetric cost application
+  on both entry and exit, same as Milestone 12
+- Any change to the frictionless result — it remains zero-cost by
+  definition, not affected by this milestone's settings
+- Any change to the indicator settings panel/table from Milestone 5/16 —
+  this is a separate settings concern, living on the backtest page
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when the three cost components are configurable,
+persisted, and correctly applied to the cost-adjusted backtest result.
+
+## Design decisions (already made — don't re-litigate these)
+- **Three cost components**:
+  - **Commission**: percentage of trade value, applied at both entry and
+    exit (generalizes Milestone 12's fixed 0.1%, now adjustable).
+  - **Fixed fee**: a flat dollar amount applied at both entry and exit,
+    independent of trade size (models flat-fee brokers).
+  - **Slippage**: a basis-point haircut applied to the execution price at
+    both entry and exit (e.g. buying at close price + slippage bps,
+    selling at close price - slippage bps) — an approximation, not a
+    real fill model. Label it as such in the UI so it isn't mistaken for
+    precise modeling.
+- **New table**: `backtest_cost_settings` (or similar), holding one
+  global row: `commission_pct`, `fixed_fee`, `slippage_bps`. Separate
+  from `indicator_settings` — different concern, different page.
+- **Defaults on first run**: if no row exists yet, default to
+  Milestone 12's original values (`commission_pct=0.001`, `fixed_fee=0`,
+  `slippage_bps=0`) so existing cost-adjusted behavior is the starting
+  point, not a surprise change.
+- **Validation**: all three values must be >= 0. No hard upper bound
+  required, but reject negative values with a clear error.
+- **API**: extend the existing backtest-related endpoints — add
+  `GET /backtest/cost-settings` and `PUT /backtest/cost-settings` (or
+  fold into the existing backtest endpoint's query params if simpler;
+  pick whichever is more consistent with how `GET /settings` /
+  `PUT /settings` already work for indicators, just as a separate
+  resource, not merged into that same table/endpoint).
+- **Application point**: extend the Milestone 12 simulation function so
+  cost application takes all three components instead of just
+  `cost_pct`, computing total cost per trade as
+  `(commission_pct * trade_value) + fixed_fee` plus the slippage
+  adjustment to the execution price itself (which in turn affects
+  trade_value and thus the return, not just a flat deduction).
+
+## Steps
+
+1. **Cost settings table** (backend)
+   - Create `backtest_cost_settings` with the three fields above, seeded
+     with Milestone 12's original defaults on first run.
+
+2. **Cost settings API**
+   - Endpoints to get/set the three values, validating all are >= 0,
+     consistent with the validation style already used for indicator
+     settings.
+
+3. **Extend the simulation function**
+   - Generalize the Milestone 12 cost logic to accept commission_pct,
+     fixed_fee, and slippage_bps, applying all three at both entry and
+     exit as described above.
+   - Confirm that setting fixed_fee=0 and slippage_bps=0 with
+     commission_pct=0.001 reproduces Milestone 12's exact prior
+     cost-adjusted results — this is the correctness check that the
+     generalization is additive, not a behavior change for existing
+     values.
+
+4. **Backtest page UI**
+   - Add a cost-settings section to the backtest page (Milestone 11) —
+     three inputs (commission %, fixed fee $, slippage bps), pre-
+     populated from stored settings, with a save action that re-runs the
+     cost-adjusted backtest and updates the displayed results without a
+     page reload.
+   - Label slippage clearly as an approximation (e.g. a short note next
+     to the input), not a precise fill model.
+
+5. **Verify end to end**
+   - Confirm default values reproduce Milestone 12's original
+     cost-adjusted results exactly (same trade log, same metrics).
+   - Change commission %, fixed fee, and slippage independently; confirm
+     each change is reflected correctly in the cost-adjusted results —
+     hand-check one trade's total cost under a new configuration against
+     a manual calculation.
+   - Restart the backend and reload the page; confirm cost settings
+     persisted.
+   - Submit a negative value for any of the three fields and confirm
+     it's rejected with a clear error.
+   - Confirm the frictionless result is completely unaffected by any
+     cost-settings change.
+
+## Definition of done
+The backtest page lets the user configure commission percentage, fixed
+fee per trade, and slippage (bps), persisted in SQLite, with the
+cost-adjusted backtest result correctly reflecting all three. Default
+values reproduce Milestone 12's original behavior exactly. The
+frictionless result remains unaffected. Saved cost presets, per-ticker
+cost configuration, and asymmetric buy/sell costs remain deferred to
+future milestones.

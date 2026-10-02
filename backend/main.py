@@ -88,6 +88,12 @@ class SettingsUpdate(BaseModel):
     macd_signal_color: Optional[str] = None
 
 
+class CostSettingsUpdate(BaseModel):
+    commission_pct: Optional[float] = None
+    fixed_fee: Optional[float] = None
+    slippage_bps: Optional[float] = None
+
+
 def _validate_settings(body: SettingsUpdate, current: dict) -> None:
     """Validate settings fields, raising HTTPException on invalid input."""
     for field in ("sma_window", "rsi_window", "macd_fast", "macd_slow", "macd_signal"):
@@ -144,6 +150,43 @@ def update_settings(body: SettingsUpdate):
     conn.commit()
 
     row = conn.execute("SELECT * FROM indicator_settings").fetchone()
+    conn.close()
+    result = dict(row)
+    result.pop("id", None)
+    return result
+
+
+@app.get("/backtest/cost-settings")
+def get_cost_settings():
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM backtest_cost_settings").fetchone()
+    conn.close()
+    result = dict(row)
+    result.pop("id", None)
+    return result
+
+
+@app.put("/backtest/cost-settings")
+def update_cost_settings(body: CostSettingsUpdate):
+    for field in ("commission_pct", "fixed_fee", "slippage_bps"):
+        val = getattr(body, field)
+        if val is not None and val < 0:
+            raise HTTPException(status_code=422, detail=f"{field} must be >= 0")
+
+    conn = get_connection()
+    updates = body.dict(exclude_none=True)
+    if not updates:
+        conn.close()
+        return get_cost_settings()
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    conn.execute(
+        f"UPDATE backtest_cost_settings SET {set_clause} WHERE id = 1",
+        list(updates.values()),
+    )
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM backtest_cost_settings").fetchone()
     conn.close()
     result = dict(row)
     result.pop("id", None)
@@ -273,6 +316,7 @@ def backtest_sma_crossover(ticker: str = Query("SPY")):
     ).fetchall()
 
     settings = conn.execute("SELECT sma_window FROM indicator_settings").fetchone()
+    cost_row = conn.execute("SELECT * FROM backtest_cost_settings").fetchone()
     conn.close()
 
     sma_window = settings["sma_window"]
@@ -284,7 +328,13 @@ def backtest_sma_crossover(ticker: str = Query("SPY")):
             detail=f"Not enough data to backtest: have {len(data)} bars, need at least {sma_window + 1} for SMA window {sma_window}",
         )
 
-    return run_backtest(data, sma_window)
+    return run_backtest(
+        data,
+        sma_window,
+        commission_pct=cost_row["commission_pct"],
+        fixed_fee=cost_row["fixed_fee"],
+        slippage_bps=cost_row["slippage_bps"],
+    )
 
 
 @app.get("/signals/sma-crossover")

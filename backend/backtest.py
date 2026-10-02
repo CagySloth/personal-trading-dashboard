@@ -3,7 +3,13 @@
 from indicators import sma
 
 
-def sma_crossover(bars: list[dict], sma_window: int, cost_pct: float = 0.0) -> dict:
+def sma_crossover(
+    bars: list[dict],
+    sma_window: int,
+    commission_pct: float = 0.0,
+    fixed_fee: float = 0.0,
+    slippage_bps: float = 0.0,
+) -> dict:
     """Simulate an SMA-crossover strategy on daily bars.
 
     Strategy rules:
@@ -15,8 +21,11 @@ def sma_crossover(bars: list[dict], sma_window: int, cost_pct: float = 0.0) -> d
         bars: list of dicts with at least 'datetime' and 'close' keys,
               in chronological order.
         sma_window: SMA look-back window (reuses the existing SMA function).
-        cost_pct: per-trade commission as a fraction (e.g. 0.001 = 0.1%),
-                  applied to trade value at both entry and exit.
+        commission_pct: per-trade commission as a fraction (e.g. 0.001 = 0.1%),
+                        applied to trade value at both entry and exit.
+        fixed_fee: flat dollar fee deducted at both entry and exit.
+        slippage_bps: basis-point price impact applied to execution price
+                      (buy higher, sell lower).
 
     Returns a dict with:
         trades:  list of {entry_date, entry_price, exit_date, exit_price, return_pct}
@@ -48,20 +57,25 @@ def sma_crossover(bars: list[dict], sma_window: int, cost_pct: float = 0.0) -> d
             continue
 
         if not in_position and price > sma_val:
-            # Buy signal: invest all cash, minus entry commission.
-            cost = cash * cost_pct
-            investable = cash - cost
-            shares = investable / price
+            # Buy signal: invest all cash, minus costs.
+            slip = price * (slippage_bps / 10000)
+            exec_price = price + slip
+            investable = cash - fixed_fee
+            commission = investable * commission_pct
+            investable -= commission
+            shares = investable / exec_price
             cash = 0.0
             in_position = True
             entry_date = bar["datetime"]
             entry_price = price
 
         elif in_position and price < sma_val:
-            # Sell signal: liquidate entire position, minus exit commission.
-            gross = shares * price
-            cost = gross * cost_pct
-            cash = gross - cost
+            # Sell signal: liquidate entire position, minus costs.
+            slip = price * (slippage_bps / 10000)
+            exec_price = price - slip
+            gross = shares * exec_price
+            commission = gross * commission_pct
+            cash = gross - commission - fixed_fee
             shares = 0.0
             in_position = False
             ret = (price - entry_price) / entry_price * 100
@@ -164,19 +178,27 @@ def _build_result(sim: dict) -> dict:
     }
 
 
-DEFAULT_COST_PCT = 0.001  # 0.1% per trade
-
-
-def run_backtest(bars: list[dict], sma_window: int) -> dict:
+def run_backtest(
+    bars: list[dict],
+    sma_window: int,
+    commission_pct: float = 0.001,
+    fixed_fee: float = 0.0,
+    slippage_bps: float = 0.0,
+) -> dict:
     """Run the SMA-crossover backtest and return full results with metrics.
 
     Returns a dict with:
-        frictionless: {strategy, trades, equity} — cost_pct=0
-        cost_adjusted: {strategy, trades, equity} — cost_pct=0.1%
+        frictionless: {strategy, trades, equity} — all costs zero
+        cost_adjusted: {strategy, trades, equity} — user-configured costs
         buy_and_hold: {total_return_pct, max_drawdown_pct, start_date, end_date}
     """
-    frictionless_sim = sma_crossover(bars, sma_window, cost_pct=0.0)
-    cost_adjusted_sim = sma_crossover(bars, sma_window, cost_pct=DEFAULT_COST_PCT)
+    frictionless_sim = sma_crossover(bars, sma_window)
+    cost_adjusted_sim = sma_crossover(
+        bars, sma_window,
+        commission_pct=commission_pct,
+        fixed_fee=fixed_fee,
+        slippage_bps=slippage_bps,
+    )
 
     frictionless = _build_result(frictionless_sim)
     cost_adjusted = _build_result(cost_adjusted_sim)
