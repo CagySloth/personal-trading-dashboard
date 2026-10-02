@@ -1,3 +1,7 @@
+import numpy as np
+import talib
+
+
 def sma(closes: list[float], window: int) -> list[float | None]:
     """Compute Simple Moving Average.
 
@@ -56,3 +60,26 @@ def rsi(closes: list[float], window: int = 14) -> list[float | None]:
             result.append(round(100 - 100 / (1 + rs), 4))
 
     return result
+
+
+def macd(
+    closes: list[float],
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    """Compute MACD via TA-Lib.
+
+    Returns three lists (same length as *closes*):
+      macd_line, signal_line, histogram
+    NaN values from TA-Lib are converted to None.
+    """
+    arr = np.array(closes, dtype="double")
+    macd_line, signal_line, hist = talib.MACD(
+        arr, fastperiod=fast, slowperiod=slow, signalperiod=signal
+    )
+
+    def to_list(a):
+        return [None if np.isnan(v) else round(float(v), 4) for v in a]
+
+    return to_list(macd_line), to_list(signal_line), to_list(hist)

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from database import get_connection, init_db, is_data_stale, is_intraday_stale
 from backtest import run_backtest, extract_signals
 from fetch import fetch, fetch_all_timeframes, fetch_extras, ensure_fresh, TIMEFRAME_CONFIG
-from indicators import sma, rsi
+from indicators import sma, rsi, macd
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +160,7 @@ def get_prices(
     timeframe: str = Query("1d"),
     include_sma: bool = Query(False, alias="sma"),
     include_rsi: bool = Query(False, alias="rsi"),
+    include_macd: bool = Query(False, alias="macd"),
 ):
     if timeframe not in TIMEFRAME_CONFIG:
         raise HTTPException(
@@ -215,6 +216,13 @@ def get_prices(
         rsi_values = rsi(closes, settings["rsi_window"])
         for row_dict, rsi_val in zip(data, rsi_values):
             row_dict["rsi"] = rsi_val
+
+    if include_macd:
+        macd_line, signal_line, hist = macd(closes)
+        for row_dict, m, s, h in zip(data, macd_line, signal_line, hist):
+            row_dict["macd"] = m
+            row_dict["macd_signal"] = s
+            row_dict["macd_hist"] = h
 
     return data
 

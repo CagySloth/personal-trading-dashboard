@@ -1,4 +1,5 @@
 apscheduler
 fastapi
+TA-Lib
 uvicorn
 yfinance

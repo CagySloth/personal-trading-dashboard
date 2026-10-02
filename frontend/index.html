@@ -201,6 +201,25 @@
     const rsiPane = chart.panes()[1];
     rsiPane.setHeight(150);
 
+    // MACD pane (pane 2): MACD line, signal line, histogram
+    const macdLineSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: '#2962FF',
+      lineWidth: 2,
+    }, 2);
+    const macdSignalSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: '#FF6D00',
+      lineWidth: 1,
+    }, 2);
+    const macdHistSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+      color: '#26a69a',
+    }, 2);
+
+    const macdPane = chart.panes()[2];
+    macdPane.setHeight(150);
+
+    // Zero line for MACD pane.
+    macdLineSeries.createPriceLine({ price: 0, color: '#787878', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+
     // Signal markers plugin (v5 API: createSeriesMarkers instead of series.setMarkers).
     let signalMarkers = null;
 
@@ -209,13 +228,16 @@
     function loadTicker(symbol) {
       const tf = tfSelect.value;
       dataNotice.style.display = 'none';
-      fetch(`${API}/prices/${symbol}?timeframe=${tf}&sma=true&rsi=true`)
+      fetch(`${API}/prices/${symbol}?timeframe=${tf}&sma=true&rsi=true&macd=true`)
         .then(r => r.json())
         .then(data => {
           if (!data.length) {
             candlestickSeries.setData([]);
             smaSeries.setData([]);
             rsiSeries.setData([]);
+            macdLineSeries.setData([]);
+            macdSignalSeries.setData([]);
+            macdHistSeries.setData([]);
             if (signalMarkers) { signalMarkers.setMarkers([]); }
             const ret = TF_RETENTION[tf];
             if (ret) {
@@ -244,6 +266,25 @@
             data
               .filter(d => d.rsi !== null)
               .map(d => ({ time: parseTime(d.datetime), value: d.rsi }))
+          );
+          macdLineSeries.setData(
+            data
+              .filter(d => d.macd !== null)
+              .map(d => ({ time: parseTime(d.datetime), value: d.macd }))
+          );
+          macdSignalSeries.setData(
+            data
+              .filter(d => d.macd_signal !== null)
+              .map(d => ({ time: parseTime(d.datetime), value: d.macd_signal }))
+          );
+          macdHistSeries.setData(
+            data
+              .filter(d => d.macd_hist !== null)
+              .map(d => ({
+                time: parseTime(d.datetime),
+                value: d.macd_hist,
+                color: d.macd_hist >= 0 ? '#26a69a' : '#ef5350',
+              }))
           );
 
           // Show SMA-crossover signal markers only for SPY on daily timeframe.

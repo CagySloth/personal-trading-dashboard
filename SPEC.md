@@ -1475,3 +1475,116 @@ Dividends/splits refresh on the existing daily schedule; fundamentals
 refresh on a longer cadence to reduce reliance on a less stable data
 source. No UI, backtester integration, or price-adjustment changes were
 made — this data exists and is retrievable, nothing more.
+
+# Milestone 15 Spec: TA-Lib Integration (MACD)
+
+## Context
+Milestones 1-14 are complete: multi-ticker dashboard with hand-implemented
+SMA and RSI (verified by hand in Milestones 2 and 4), a configuration
+layer for those two indicators, multi-timeframe support with intraday
+accumulation, dividends/splits/fundamentals data, and a backtesting
+engine with cost modeling. This milestone introduces TA-Lib as a
+dependency and uses it to add one new indicator — MACD — rather than
+reimplementing it by hand as SMA/RSI were.
+
+## Goal
+Add MACD (Moving Average Convergence Divergence) as a third indicator,
+computed via TA-Lib, rendered in its own chart panel, following the same
+overall pattern established by RSI (Milestone 4) — but using a library
+function instead of custom calculation code.
+
+## Explicitly out of scope for this milestone
+- Reimplementing or replacing the existing SMA/RSI calculations with
+  TA-Lib equivalents — those remain as-is, hand-verified, and untouched.
+  This milestone only adds MACD as something new.
+- Any other TA-Lib indicator beyond MACD (Bollinger Bands, stochastic,
+  ATR, etc.) — one new indicator, to prove out the TA-Lib integration
+  itself, before adding more
+- Adding MACD to the Milestone 5 configuration UI/settings table —
+  MACD's parameters are function/API parameters with sensible defaults,
+  same as RSI was before Milestone 5 existed, not yet user-configurable
+  through the settings panel
+- Using MACD in the backtester or as a new strategy — this milestone is
+  chart display only, same scope boundary RSI had in Milestone 4
+- Any change to fetch scheduling, data accumulation, or fundamentals
+  work from Milestones 12-14
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when MACD renders correctly, computed via TA-Lib,
+verified against a reliable reference.
+
+## Design decisions (already made — don't re-litigate these)
+- **Dependency**: add `TA-Lib` (the Python wrapper) to the project's
+  dependencies. As of recent versions it ships prebuilt wheels for
+  common platforms/Python versions, so installation should be
+  straightforward via pip — but confirm this works cleanly in this
+  project's actual environment before proceeding, and flag it clearly if
+  it doesn't (e.g. falls back to needing a system-level library install).
+- **Default parameters**: standard MACD settings — 12-period fast EMA,
+  26-period slow EMA, 9-period signal line — implemented as parameters,
+  not hardcoded, following the same pattern used for SMA's window and
+  RSI's window/thresholds.
+- **API shape**: extend the existing `GET /prices/{ticker}` endpoint
+  further, e.g. `?macd=1` (or with explicit `macd_fast`/`macd_slow`/
+  `macd_signal` overrides), independent of the existing `sma`/`rsi`
+  params — all three should be usable together or independently.
+- **Rendering**: MACD gets its own panel, separate from price and from
+  the RSI panel, since it has its own distinct scale — same
+  multi-pane approach used for RSI in Milestone 4. A standard MACD
+  display includes the MACD line, the signal line, and a histogram
+  (the difference between them) — implement all three, since that's
+  what makes MACD readable, not just the MACD line alone.
+- **Verification approach**: MACD is harder to hand-calculate step by
+  step than SMA or RSI (it involves two EMAs plus a signal line EMA on
+  top). Rather than manually recomputing it from scratch, cross-check
+  TA-Lib's output for a few dates against a second reliable source (e.g.
+  a well-known charting site's MACD values for the same ticker/dates, or
+  TA-Lib's own documented test vectors if available) to confirm the
+  values are sane and correctly aligned to the right dates — full manual
+  recomputation isn't required here the way it was for SMA/RSI.
+
+## Steps
+
+1. **Add and verify the TA-Lib dependency**
+   - Install TA-Lib in the project environment. Confirm it imports and a
+     basic function call works before writing any integration code.
+     Note in your response how installation went (clean via wheel, or
+     required extra steps) — this affects whether TA-Lib is a
+     comfortable long-term dependency for a solo-maintained project.
+
+2. **MACD calculation** (backend)
+   - A function that takes a series of closes and the three period
+     parameters (fast/slow/signal), returns MACD line, signal line, and
+     histogram series using TA-Lib's MACD function.
+
+3. **Extend the API endpoint**
+   - `GET /prices/{ticker}?macd=1` (with optional period overrides)
+     returns MACD line/signal/histogram alongside existing OHLCV/SMA/RSI
+     data, independently of those other params.
+
+4. **Frontend MACD panel**
+   - Add a third chart pane (below price and RSI) rendering the MACD
+     line, signal line, and histogram, time-synchronized with the other
+     panes.
+   - Panel updates correctly when the ticker or timeframe selection
+     changes, consistent with how SMA/RSI already behave.
+
+5. **Verify end to end**
+   - Cross-check MACD values for a few dates against a second source,
+     per the verification approach above, confirming values and dates
+     align correctly.
+   - Confirm the MACD panel is time-synchronized with the price and RSI
+     panels above it.
+   - Confirm requesting `?macd=1` works independently of `?sma=`/`?rsi=`
+     — all three indicators remain independently toggleable via query
+     params, none breaks the others.
+   - Confirm switching tickers/timeframes updates the MACD panel
+     correctly alongside the existing panels.
+
+## Definition of done
+Selecting any watchlist ticker shows the existing candlestick+SMA chart
+and RSI panel, plus a new MACD panel (line, signal, histogram) computed
+via TA-Lib, cross-checked against a reliable reference. TA-Lib is
+confirmed to install cleanly in this project's environment. SMA and RSI
+remain hand-implemented and unchanged. MACD configuration UI and
+backtester integration remain deferred to future milestones.
