@@ -94,6 +94,22 @@ class CostSettingsUpdate(BaseModel):
     slippage_bps: Optional[float] = None
 
 
+class ValidationSettingsUpdate(BaseModel):
+    enabled: bool
+
+
+def _compute_split_date(conn, ticker_id: int) -> str:
+    """Compute the ~70/30 split date from cached SPY daily bars."""
+    bars = conn.execute(
+        "SELECT datetime FROM prices WHERE ticker_id = ? AND timeframe = '1d' ORDER BY datetime ASC",
+        (ticker_id,),
+    ).fetchall()
+    if not bars:
+        raise HTTPException(status_code=422, detail="No daily data available to compute split date")
+    idx = int(len(bars) * 0.7)
+    return bars[idx]["datetime"]
+
+
 def _validate_settings(body: SettingsUpdate, current: dict) -> None:
     """Validate settings fields, raising HTTPException on invalid input."""
     for field in ("sma_window", "rsi_window", "macd_fast", "macd_slow", "macd_signal"):
@@ -191,6 +207,61 @@ def update_cost_settings(body: CostSettingsUpdate):
     result = dict(row)
     result.pop("id", None)
     return result
+
+
+@app.get("/backtest/validation-settings")
+def get_validation_settings():
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM backtest_validation_settings").fetchone()
+    conn.close()
+    return {"enabled": bool(row["enabled"]), "split_date": row["split_date"]}
+
+
+@app.put("/backtest/validation-settings")
+def update_validation_settings(body: ValidationSettingsUpdate):
+    conn = get_connection()
+    current = conn.execute("SELECT * FROM backtest_validation_settings").fetchone()
+
+    if body.enabled:
+        split_date = current["split_date"]
+        if split_date is None:
+            # First time enabling — compute and pin the split date.
+            spy = conn.execute("SELECT id FROM tickers WHERE symbol = 'SPY'").fetchone()
+            if spy is None:
+                conn.close()
+                raise HTTPException(status_code=422, detail="SPY ticker not found")
+            split_date = _compute_split_date(conn, spy["id"])
+            conn.execute(
+                "UPDATE backtest_validation_settings SET enabled = 1, split_date = ? WHERE id = 1",
+                (split_date,),
+            )
+        else:
+            conn.execute("UPDATE backtest_validation_settings SET enabled = 1 WHERE id = 1")
+    else:
+        conn.execute("UPDATE backtest_validation_settings SET enabled = 0 WHERE id = 1")
+
+    conn.commit()
+    row = conn.execute("SELECT * FROM backtest_validation_settings").fetchone()
+    conn.close()
+    return {"enabled": bool(row["enabled"]), "split_date": row["split_date"]}
+
+
+@app.post("/backtest/validation-settings/reset")
+def reset_validation_split():
+    conn = get_connection()
+    spy = conn.execute("SELECT id FROM tickers WHERE symbol = 'SPY'").fetchone()
+    if spy is None:
+        conn.close()
+        raise HTTPException(status_code=422, detail="SPY ticker not found")
+    split_date = _compute_split_date(conn, spy["id"])
+    conn.execute(
+        "UPDATE backtest_validation_settings SET split_date = ? WHERE id = 1",
+        (split_date,),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM backtest_validation_settings").fetchone()
+    conn.close()
+    return {"enabled": bool(row["enabled"]), "split_date": row["split_date"]}
 
 
 @app.post("/fetch/run")
@@ -317,10 +388,16 @@ def backtest_sma_crossover(ticker: str = Query("SPY")):
 
     settings = conn.execute("SELECT sma_window FROM indicator_settings").fetchone()
     cost_row = conn.execute("SELECT * FROM backtest_cost_settings").fetchone()
+    val_row = conn.execute("SELECT * FROM backtest_validation_settings").fetchone()
     conn.close()
 
     sma_window = settings["sma_window"]
     data = [dict(r) for r in bars]
+    cost_kwargs = {
+        "commission_pct": cost_row["commission_pct"],
+        "fixed_fee": cost_row["fixed_fee"],
+        "slippage_bps": cost_row["slippage_bps"],
+    }
 
     if len(data) < sma_window + 1:
         raise HTTPException(
@@ -328,13 +405,34 @@ def backtest_sma_crossover(ticker: str = Query("SPY")):
             detail=f"Not enough data to backtest: have {len(data)} bars, need at least {sma_window + 1} for SMA window {sma_window}",
         )
 
-    return run_backtest(
-        data,
-        sma_window,
-        commission_pct=cost_row["commission_pct"],
-        fixed_fee=cost_row["fixed_fee"],
-        slippage_bps=cost_row["slippage_bps"],
-    )
+    if not val_row["enabled"]:
+        result = run_backtest(data, sma_window, **cost_kwargs)
+        result["split_enabled"] = False
+        return result
+
+    # Split mode: divide bars at the pinned split_date.
+    split_date = val_row["split_date"]
+    is_bars = [b for b in data if b["datetime"] < split_date]
+    oos_bars = [b for b in data if b["datetime"] >= split_date]
+
+    min_bars = sma_window + 1
+    if len(is_bars) < min_bars:
+        raise HTTPException(
+            status_code=422,
+            detail=f"In-sample window too small: {len(is_bars)} bars, need at least {min_bars}",
+        )
+    if len(oos_bars) < min_bars:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Out-of-sample window too small: {len(oos_bars)} bars, need at least {min_bars}",
+        )
+
+    return {
+        "split_enabled": True,
+        "split_date": split_date,
+        "in_sample": run_backtest(is_bars, sma_window, **cost_kwargs),
+        "out_of_sample": run_backtest(oos_bars, sma_window, **cost_kwargs),
+    }
 
 
 @app.get("/signals/sma-crossover")

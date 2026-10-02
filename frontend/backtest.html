@@ -34,8 +34,19 @@
     #cost-apply { padding: 6px 16px; font-size: 14px; cursor: pointer; }
     #cost-error { color: #d32f2f; font-size: 13px; width: 100%; display: none; }
 
+    /* Validation settings */
+    #validation-settings {
+      display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+      margin-bottom: 24px; padding: 12px 16px;
+      border: 1px solid #ddd; border-radius: 8px; background: #fafafa;
+      font-size: 14px;
+    }
+    #validation-settings label { cursor: pointer; }
+    #split-info { font-size: 13px; color: #555; }
+    #split-reset { padding: 4px 12px; font-size: 13px; cursor: pointer; }
+
     /* Metrics cards */
-    #metrics { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+    .metrics { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
     .metric-card {
       flex: 1; min-width: 180px;
       border: 1px solid #ddd; border-radius: 8px; padding: 16px;
@@ -46,15 +57,15 @@
     .metric-row .value { font-weight: 600; }
 
     /* Equity curve */
-    #equity-chart { width: 100%; height: 300px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
-    #equity-legend { font-size: 13px; color: #555; margin-bottom: 24px; display: flex; gap: 24px; }
+    .equity-chart { width: 100%; height: 300px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+    .equity-legend { font-size: 13px; color: #555; margin-bottom: 24px; display: flex; gap: 24px; }
     .legend-item { display: flex; align-items: center; gap: 6px; }
     .legend-swatch { width: 20px; height: 3px; border-radius: 1px; }
 
     /* Trade log */
-    #trade-section h2 { font-size: 16px; margin: 0 0 8px; }
-    #trade-count { font-size: 13px; color: #666; margin-bottom: 8px; }
-    #trade-table-wrap { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; }
+    .trade-section h2 { font-size: 16px; margin: 0 0 8px; }
+    .trade-count { font-size: 13px; color: #666; margin-bottom: 8px; }
+    .trade-table-wrap { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     thead th {
       position: sticky; top: 0; background: #f5f5f5;
@@ -67,6 +78,13 @@
     .negative { color: #c62828; }
 
     #loading { text-align: center; padding: 60px; color: #888; font-size: 16px; }
+
+    /* Window section */
+    .window-section { margin-bottom: 32px; }
+    .window-section h2 {
+      font-size: 17px; margin: 0 0 16px; padding-bottom: 8px;
+      border-bottom: 2px solid #2962FF;
+    }
   </style>
 </head>
 <body>
@@ -99,54 +117,13 @@
         <div id="cost-error"></div>
       </div>
 
-      <div id="metrics">
-        <div class="metric-card">
-          <h3>Frictionless</h3>
-          <div class="metric-row"><span class="label">Total Return</span><span class="value" id="fl-return"></span></div>
-          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="fl-drawdown"></span></div>
-          <div class="metric-row"><span class="label">Trades</span><span class="value" id="fl-trades"></span></div>
-          <div class="metric-row"><span class="label">Win Rate</span><span class="value" id="fl-winrate"></span></div>
-        </div>
-        <div class="metric-card">
-          <h3 id="ca-heading">Cost-Adjusted</h3>
-          <div class="metric-row"><span class="label">Total Return</span><span class="value" id="ca-return"></span></div>
-          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="ca-drawdown"></span></div>
-          <div class="metric-row"><span class="label">Trades</span><span class="value" id="ca-trades"></span></div>
-          <div class="metric-row"><span class="label">Win Rate</span><span class="value" id="ca-winrate"></span></div>
-        </div>
-        <div class="metric-card">
-          <h3>Buy &amp; Hold</h3>
-          <div class="metric-row"><span class="label">Total Return</span><span class="value" id="bh-return"></span></div>
-          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value" id="bh-drawdown"></span></div>
-          <div class="metric-row"><span class="label">Period</span><span class="value" id="bh-period"></span></div>
-        </div>
+      <div id="validation-settings">
+        <label><input type="checkbox" id="split-toggle"> Enable In-Sample / Out-of-Sample Split</label>
+        <span id="split-info"></span>
+        <button id="split-reset" style="display:none">Reset Split Point</button>
       </div>
 
-      <div id="equity-chart"></div>
-      <div id="equity-legend">
-        <div class="legend-item"><span class="legend-swatch" style="background:#2962FF"></span> Frictionless</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:#FF6D00"></span> Cost-Adjusted</div>
-      </div>
-
-      <div id="trade-section">
-        <h2>Trade Log</h2>
-        <div id="trade-count"></div>
-        <div id="trade-table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Entry Date</th>
-                <th>Entry Price</th>
-                <th>Exit Date</th>
-                <th>Exit Price</th>
-                <th>Return</th>
-              </tr>
-            </thead>
-            <tbody id="trade-body"></tbody>
-          </table>
-        </div>
-      </div>
+      <div id="backtest-content"></div>
     </div>
   </div>
 
@@ -154,10 +131,13 @@
   <script>
     const API = 'http://127.0.0.1:8000';
     const costError = document.getElementById('cost-error');
+    const splitToggle = document.getElementById('split-toggle');
+    const splitInfo = document.getElementById('split-info');
+    const splitReset = document.getElementById('split-reset');
+    const backtestContent = document.getElementById('backtest-content');
 
-    let chart = null;
-    let flSeries = null;
-    let caSeries = null;
+    // Track created charts so we can clean up on re-render.
+    let activeCharts = [];
 
     function updateCostHeading() {
       const comm = parseFloat(document.getElementById('cost-commission').value) || 0;
@@ -169,10 +149,108 @@
       if (fee > 0) parts.push('$' + fee + ' fee');
       if (slip > 0) parts.push(slip + ' bps');
 
-      const heading = document.getElementById('ca-heading');
-      heading.textContent = parts.length
-        ? 'Cost-Adjusted (' + parts.join(' + ') + ')'
-        : 'Cost-Adjusted';
+      return parts.length ? 'Cost-Adjusted (' + parts.join(' + ') + ')' : 'Cost-Adjusted';
+    }
+
+    function renderResult(container, result, costHeading) {
+      const fl = result.frictionless.strategy;
+      const ca = result.cost_adjusted.strategy;
+      const bh = result.buy_and_hold;
+
+      // Metrics cards
+      const metricsDiv = document.createElement('div');
+      metricsDiv.className = 'metrics';
+      metricsDiv.innerHTML = `
+        <div class="metric-card">
+          <h3>Frictionless</h3>
+          <div class="metric-row"><span class="label">Total Return</span><span class="value">${fl.total_return_pct.toFixed(2)}%</span></div>
+          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value">${fl.max_drawdown_pct.toFixed(2)}%</span></div>
+          <div class="metric-row"><span class="label">Trades</span><span class="value">${fl.num_trades}</span></div>
+          <div class="metric-row"><span class="label">Win Rate</span><span class="value">${fl.win_rate_pct.toFixed(2)}%</span></div>
+        </div>
+        <div class="metric-card">
+          <h3>${costHeading}</h3>
+          <div class="metric-row"><span class="label">Total Return</span><span class="value">${ca.total_return_pct.toFixed(2)}%</span></div>
+          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value">${ca.max_drawdown_pct.toFixed(2)}%</span></div>
+          <div class="metric-row"><span class="label">Trades</span><span class="value">${ca.num_trades}</span></div>
+          <div class="metric-row"><span class="label">Win Rate</span><span class="value">${ca.win_rate_pct.toFixed(2)}%</span></div>
+        </div>
+        <div class="metric-card">
+          <h3>Buy &amp; Hold</h3>
+          <div class="metric-row"><span class="label">Total Return</span><span class="value">${bh.total_return_pct.toFixed(2)}%</span></div>
+          <div class="metric-row"><span class="label">Max Drawdown</span><span class="value">${bh.max_drawdown_pct.toFixed(2)}%</span></div>
+          <div class="metric-row"><span class="label">Period</span><span class="value">${bh.start_date} to ${bh.end_date}</span></div>
+        </div>
+      `;
+      container.appendChild(metricsDiv);
+
+      // Equity chart
+      const chartEl = document.createElement('div');
+      chartEl.className = 'equity-chart';
+      container.appendChild(chartEl);
+
+      // Chart needs to be created after element is in the DOM.
+      setTimeout(() => {
+        const chart = LightweightCharts.createChart(chartEl, {
+          width: chartEl.clientWidth,
+          height: 300,
+        });
+        activeCharts.push({ chart, el: chartEl });
+
+        const flSeries = chart.addSeries(LightweightCharts.LineSeries, {
+          color: '#2962FF', lineWidth: 2,
+        });
+        flSeries.setData(
+          result.frictionless.equity.map(e => ({ time: e.date, value: e.value }))
+        );
+
+        const caSeries = chart.addSeries(LightweightCharts.LineSeries, {
+          color: '#FF6D00', lineWidth: 2,
+        });
+        caSeries.setData(
+          result.cost_adjusted.equity.map(e => ({ time: e.date, value: e.value }))
+        );
+
+        chart.timeScale().fitContent();
+      }, 0);
+
+      // Legend
+      const legend = document.createElement('div');
+      legend.className = 'equity-legend';
+      legend.innerHTML = `
+        <div class="legend-item"><span class="legend-swatch" style="background:#2962FF"></span> Frictionless</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:#FF6D00"></span> Cost-Adjusted</div>
+      `;
+      container.appendChild(legend);
+
+      // Trade log
+      const tradeSection = document.createElement('div');
+      tradeSection.className = 'trade-section';
+      const trades = result.frictionless.trades;
+      let tradeRows = '';
+      trades.forEach((t, i) => {
+        const retClass = t.return_pct >= 0 ? 'positive' : 'negative';
+        const retSign = t.return_pct >= 0 ? '+' : '';
+        tradeRows += `<tr>
+          <td>${i + 1}</td>
+          <td>${t.entry_date}</td>
+          <td>${t.entry_price.toFixed(2)}</td>
+          <td>${t.exit_date}</td>
+          <td>${t.exit_price.toFixed(2)}</td>
+          <td class="${retClass}">${retSign}${t.return_pct.toFixed(2)}%</td>
+        </tr>`;
+      });
+      tradeSection.innerHTML = `
+        <h2>Trade Log</h2>
+        <div class="trade-count">${trades.length} trades</div>
+        <div class="trade-table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Entry Date</th><th>Entry Price</th><th>Exit Date</th><th>Exit Price</th><th>Return</th></tr></thead>
+            <tbody>${tradeRows}</tbody>
+          </table>
+        </div>
+      `;
+      container.appendChild(tradeSection);
     }
 
     function loadBacktest() {
@@ -182,75 +260,38 @@
           document.getElementById('loading').style.display = 'none';
           document.getElementById('results').style.display = 'block';
 
-          const fl = data.frictionless.strategy;
-          const ca = data.cost_adjusted.strategy;
-          const bh = data.buy_and_hold;
+          // Destroy old charts.
+          activeCharts.forEach(c => c.chart.remove());
+          activeCharts = [];
+          backtestContent.innerHTML = '';
 
-          // --- Metrics ---
-          document.getElementById('fl-return').textContent = fl.total_return_pct.toFixed(2) + '%';
-          document.getElementById('fl-drawdown').textContent = fl.max_drawdown_pct.toFixed(2) + '%';
-          document.getElementById('fl-trades').textContent = fl.num_trades;
-          document.getElementById('fl-winrate').textContent = fl.win_rate_pct.toFixed(2) + '%';
+          const costHeading = updateCostHeading();
 
-          document.getElementById('ca-return').textContent = ca.total_return_pct.toFixed(2) + '%';
-          document.getElementById('ca-drawdown').textContent = ca.max_drawdown_pct.toFixed(2) + '%';
-          document.getElementById('ca-trades').textContent = ca.num_trades;
-          document.getElementById('ca-winrate').textContent = ca.win_rate_pct.toFixed(2) + '%';
+          if (!data.split_enabled) {
+            // Single full-history view (Milestone 17 behavior).
+            renderResult(backtestContent, data, costHeading);
+          } else {
+            // Split mode: two windows.
+            splitInfo.textContent = 'Split date: ' + data.split_date;
 
-          document.getElementById('bh-return').textContent = bh.total_return_pct.toFixed(2) + '%';
-          document.getElementById('bh-drawdown').textContent = bh.max_drawdown_pct.toFixed(2) + '%';
-          document.getElementById('bh-period').textContent = bh.start_date + ' to ' + bh.end_date;
+            const isSection = document.createElement('div');
+            isSection.className = 'window-section';
+            const isTitle = document.createElement('h2');
+            const isBh = data.in_sample.buy_and_hold;
+            isTitle.textContent = 'In-Sample (' + isBh.start_date + ' to ' + isBh.end_date + ')';
+            isSection.appendChild(isTitle);
+            renderResult(isSection, data.in_sample, costHeading);
+            backtestContent.appendChild(isSection);
 
-          updateCostHeading();
-
-          // --- Equity curves (both on one chart) ---
-          const chartEl = document.getElementById('equity-chart');
-
-          if (!chart) {
-            chart = LightweightCharts.createChart(chartEl, {
-              width: chartEl.clientWidth,
-              height: 300,
-            });
-            flSeries = chart.addSeries(LightweightCharts.LineSeries, {
-              color: '#2962FF',
-              lineWidth: 2,
-            });
-            caSeries = chart.addSeries(LightweightCharts.LineSeries, {
-              color: '#FF6D00',
-              lineWidth: 2,
-            });
-            window.addEventListener('resize', () => {
-              chart.resize(chartEl.clientWidth, 300);
-            });
+            const oosSection = document.createElement('div');
+            oosSection.className = 'window-section';
+            const oosTitle = document.createElement('h2');
+            const oosBh = data.out_of_sample.buy_and_hold;
+            oosTitle.textContent = 'Out-of-Sample (' + oosBh.start_date + ' to ' + oosBh.end_date + ')';
+            oosSection.appendChild(oosTitle);
+            renderResult(oosSection, data.out_of_sample, costHeading);
+            backtestContent.appendChild(oosSection);
           }
-
-          flSeries.setData(
-            data.frictionless.equity.map(e => ({ time: e.date, value: e.value }))
-          );
-          caSeries.setData(
-            data.cost_adjusted.equity.map(e => ({ time: e.date, value: e.value }))
-          );
-          chart.timeScale().fitContent();
-
-          // --- Trade log (same trades for both variants) ---
-          const trades = data.frictionless.trades;
-          const tbody = document.getElementById('trade-body');
-          tbody.innerHTML = '';
-          document.getElementById('trade-count').textContent = trades.length + ' trades';
-
-          trades.forEach((t, i) => {
-            const tr = document.createElement('tr');
-            const retClass = t.return_pct >= 0 ? 'positive' : 'negative';
-            const retSign = t.return_pct >= 0 ? '+' : '';
-            tr.innerHTML =
-              `<td>${i + 1}</td>` +
-              `<td>${t.entry_date}</td>` +
-              `<td>${t.entry_price.toFixed(2)}</td>` +
-              `<td>${t.exit_date}</td>` +
-              `<td>${t.exit_price.toFixed(2)}</td>` +
-              `<td class="${retClass}">${retSign}${t.return_pct.toFixed(2)}%</td>`;
-            tbody.appendChild(tr);
-          });
         });
     }
 
@@ -281,17 +322,55 @@
         });
     }
 
-    document.getElementById('cost-apply').addEventListener('click', saveCostSettings);
+    function toggleSplit() {
+      const enabled = splitToggle.checked;
+      fetch(`${API}/backtest/validation-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      })
+        .then(r => r.json())
+        .then(s => {
+          splitReset.style.display = s.enabled ? '' : 'none';
+          if (!s.enabled) splitInfo.textContent = '';
+          loadBacktest();
+        });
+    }
 
-    // --- Init: load cost settings, then load backtest ---
-    fetch(`${API}/backtest/cost-settings`)
-      .then(r => r.json())
-      .then(s => {
-        document.getElementById('cost-commission').value = (s.commission_pct * 100);
-        document.getElementById('cost-fixed-fee').value = s.fixed_fee;
-        document.getElementById('cost-slippage').value = s.slippage_bps;
-        loadBacktest();
-      });
+    function resetSplit() {
+      fetch(`${API}/backtest/validation-settings/reset`, { method: 'POST' })
+        .then(r => r.json())
+        .then(s => {
+          splitInfo.textContent = s.split_date ? 'Split date: ' + s.split_date : '';
+          loadBacktest();
+        });
+    }
+
+    document.getElementById('cost-apply').addEventListener('click', saveCostSettings);
+    splitToggle.addEventListener('change', toggleSplit);
+    splitReset.addEventListener('click', resetSplit);
+
+    // --- Init: load cost settings + validation settings, then load backtest ---
+    Promise.all([
+      fetch(`${API}/backtest/cost-settings`).then(r => r.json()),
+      fetch(`${API}/backtest/validation-settings`).then(r => r.json()),
+    ]).then(([costSettings, valSettings]) => {
+      document.getElementById('cost-commission').value = (costSettings.commission_pct * 100);
+      document.getElementById('cost-fixed-fee').value = costSettings.fixed_fee;
+      document.getElementById('cost-slippage').value = costSettings.slippage_bps;
+
+      splitToggle.checked = valSettings.enabled;
+      splitReset.style.display = valSettings.enabled ? '' : 'none';
+      if (valSettings.split_date && valSettings.enabled) {
+        splitInfo.textContent = 'Split date: ' + valSettings.split_date;
+      }
+
+      loadBacktest();
+    });
+
+    window.addEventListener('resize', () => {
+      activeCharts.forEach(c => c.chart.resize(c.el.clientWidth, 300));
+    });
   </script>
 </body>
 </html>

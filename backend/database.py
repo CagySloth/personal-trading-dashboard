@@ -81,6 +81,14 @@ def init_db() -> None:
         );
 
         INSERT OR IGNORE INTO backtest_cost_settings (id) VALUES (1);
+
+        CREATE TABLE IF NOT EXISTS backtest_validation_settings (
+            id          INTEGER PRIMARY KEY CHECK (id = 1),
+            enabled     INTEGER NOT NULL DEFAULT 0,
+            split_date  TEXT
+        );
+
+        INSERT OR IGNORE INTO backtest_validation_settings (id) VALUES (1);
     """)
 
     # Migrate from daily_prices to prices if the old table exists.

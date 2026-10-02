@@ -1822,3 +1822,150 @@ values reproduce Milestone 12's original behavior exactly. The
 frictionless result remains unaffected. Saved cost presets, per-ticker
 cost configuration, and asymmetric buy/sell costs remain deferred to
 future milestones.
+
+# Milestone 18 Spec: Optional In-Sample / Out-of-Sample Split
+
+## Context
+Milestones 9, 12, and 17 built and progressively refined the
+SMA-crossover backtesting engine, but every result so far has been
+measured against the same full historical period, with no held-out data
+to check whether performance generalizes. This milestone adds an
+optional in-sample/out-of-sample split to the backtest page: when
+enabled, the existing simulation runs separately on a "training" window
+and a held-out "test" window, so overfitting becomes visible rather than
+hidden. The split is off by default — existing full-history behavior
+(Milestones 9/11/12/17) is unchanged unless the user explicitly turns
+this on.
+
+## Critical design point — read before implementing
+The split boundary must be a **fixed, pinned date**, not a percentage
+recomputed fresh on every request. If "70/30" were recalculated against
+the full dataset each time, the boundary would silently drift forward as
+new data accumulates (via the Milestone 6/13 scheduled fetch job) — bars
+that were "out-of-sample" today could become "in-sample" next month
+simply because the dataset grew, retroactively corrupting what the
+out-of-sample test was supposed to prove. Instead:
+- The split date is computed **once**, the first time the split is
+  enabled, as roughly 70% of the history available *at that moment*.
+- That date is then **stored and reused** on every subsequent request —
+  never recalculated from a live percentage.
+- In-sample is everything before that pinned date — fixed forever (until
+  an explicit reset, see below).
+- Out-of-sample is everything on or after that pinned date — this window
+  **grows naturally over time** as new data accumulates. This is correct
+  and intentional, not a bug: it means the out-of-sample test gets more
+  statistically meaningful the longer the dashboard runs.
+
+## Goal
+The backtest page gains a toggle to enable/disable the in-sample/
+out-of-sample split. When enabled, the existing SMA-crossover simulation
+(with current cost settings from Milestone 17) runs independently on
+each window, and both results display side by side, clearly labeled.
+When disabled, the page behaves exactly as it did before this milestone.
+
+## Explicitly out of scope for this milestone
+- True walk-forward validation (multiple rolling train/test windows,
+  re-splitting repeatedly) — this milestone is a single fixed split,
+  not a rolling scheme
+- Automatic/periodic re-splitting — the split date only changes via the
+  explicit manual reset action described below, never silently
+- Configurable split ratio (e.g. choosing 80/20 instead of 70/30) — use
+  a fixed 70/30 default for this milestone; making the ratio itself
+  configurable can be a future refinement if wanted
+- Any strategy other than SMA crossover, any ticker other than SPY —
+  consistent with the existing backtester's scope
+- Changing how the frictionless/cost-adjusted comparison works — the
+  split applies on top of that existing mechanism, not instead of it
+  (each window gets its own frictionless and cost-adjusted results)
+
+Do not add any of the above even if it seems easy or natural — this
+milestone is done when the split can be toggled on/off, the boundary
+date is correctly pinned rather than drifting, and both windows'
+results display clearly.
+
+## Design decisions (already made — don't re-litigate these)
+- **New table**: `backtest_validation_settings`, holding `enabled`
+  (boolean, default false) and `split_date` (nullable until first
+  enabled).
+- **Pinning behavior**: enabling the split for the first time (when
+  `split_date` is null) computes it as the date at the ~70th percentile
+  of currently cached SPY daily bars, stores it, and never recalculates
+  it automatically afterward — even as more data accumulates.
+- **Manual reset**: a separate, clearly-labeled action ("Reset split
+  point") recomputes `split_date` from scratch using the current full
+  dataset, overwriting the old pinned date. This is a deliberate,
+  infrequent action the user takes consciously (e.g. after a major
+  change to the strategy or ticker setup) — never triggered
+  automatically.
+- **Toggle persists**: `enabled` is stored and respected across
+  restarts, same persistence discipline as other settings in this
+  project.
+- **Display**: when enabled, the backtest page shows in-sample and
+  out-of-sample results side by side (each with frictionless and
+  cost-adjusted metrics, trade log, equity curve), clearly labeled with
+  their actual date ranges so it's obvious which window is which and
+  how large each one currently is.
+- **API**: extend backtest-related endpoints to accept the split state,
+  or add a dedicated endpoint (e.g. `GET /backtest/sma-crossover/split`)
+  returning both windows' results when enabled — whichever is more
+  consistent with the existing backtest endpoint's shape from
+  Milestone 9/12/17.
+
+## Steps
+
+1. **Validation settings table** (backend)
+   - Create `backtest_validation_settings` with `enabled` and
+     `split_date`, defaulting to disabled/null.
+
+2. **Split computation and pinning logic**
+   - A function that, given the current cached SPY daily history,
+     computes a ~70/30 split date. Called only when enabling the split
+     for the first time, or via the explicit reset action — never on
+     every request.
+
+3. **Extend backtest logic to run both windows**
+   - When the split is enabled, run the existing simulation function
+     (Milestone 9/12/17, with current cost settings) independently on
+     bars before `split_date` (in-sample) and bars on/after it
+     (out-of-sample), each producing its own frictionless and
+     cost-adjusted results.
+
+4. **API and toggle/reset actions**
+   - Endpoint(s) to get/set the `enabled` flag, and a separate action to
+     trigger the manual reset described above.
+   - Extend the backtest results endpoint to return split results when
+     enabled, full-history results when disabled (unchanged from
+     Milestone 17).
+
+5. **Backtest page UI**
+   - Add a toggle for the split and a "Reset split point" action.
+   - When enabled, display in-sample and out-of-sample results clearly
+     side by side with their actual date ranges shown.
+   - When disabled, the page looks and behaves exactly as it did after
+     Milestone 17 — no leftover UI artifacts from the split.
+
+6. **Verify end to end**
+   - Enable the split; confirm the pinned `split_date` is computed
+     once and stored, not recalculated on a page refresh.
+   - Confirm in-sample and out-of-sample results are each internally
+     consistent with what Milestone 9/12/17's simulation would produce
+     if run on just that date range manually.
+   - Simulate new data accumulating (e.g. run the fetch job again) and
+     confirm the out-of-sample window's date range grows to include the
+     new bars, while `split_date` itself and the in-sample window stay
+     unchanged.
+   - Use the manual reset action and confirm it recomputes and
+     overwrites `split_date`, changing the window boundary as expected.
+   - Disable the split and confirm the page reverts to exactly the
+     Milestone 17 full-history view.
+
+## Definition of done
+The backtest page offers a toggle for an in-sample/out-of-sample split,
+off by default. When enabled, the split boundary is computed once and
+pinned — not silently recalculated as new data accumulates — so the
+out-of-sample window grows forward over time while the in-sample window
+stays fixed, until an explicit manual reset. Both windows show
+frictionless and cost-adjusted results clearly labeled with their actual
+date ranges. Disabling the split restores exactly the Milestone 17
+behavior. Walk-forward validation and a configurable split ratio remain
+deferred to future milestones.
